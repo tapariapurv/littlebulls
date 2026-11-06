@@ -1,0 +1,8 @@
+node_modules
+dist
+.vercel
+.venv
+__pycache__
+.taste-skill
+firebase-debug.log
+.firebase

@@ -1,0 +1,1 @@
+{"firestore":{"rules":"firestore.rules"},"auth":{"providers":{"emailPassword":true,"googleSignIn":{"oAuthBrandDisplayName":"LittleBulls","supportEmail":"tapariapurv@gmail.com"}}}}
