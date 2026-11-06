@@ -1,22 +1,24 @@
 import { useEffect, useRef, useState } from 'react'
 import { CandlestickSeries, LineSeries, createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts'
 import { AnimatePresence, motion } from 'motion/react'
-import { api, candles, mutate, nameOf, useQuotes } from './data'
+import { candles, mutate, nameOf, stockInfo, useQuotes, type Info } from './data'
 import { MARGIN, addOrder, canAfford, fill, summary, type Candle, type Portfolio, type Side } from './engine'
 import { Bully, Num, Tabs, Term, Tick, money, signedMoney, spring, tone, useToast } from './ui'
 
 const IST = 19800 // Lightweight Charts draws timestamps as UTC, so shift them to show Indian time.
 type Range = '1D' | '5D' | '1M' | '6M' | '1Y' | '5Y'
-type Info = { name: string; specs: Record<string, string>; news: { source: string; when: string; url: string; title: string }[] }
+export const SPEC_WORDS: Record<string, string> = { 'Mkt. cap': 'Company size', 'P/E ratio': 'Price vs profit', Dividend: 'Thank-you money', '52-wk high': 'Year’s highest', '52-wk low': 'Year’s lowest', Volume: 'Traded today', EPS: 'Profit per share' }
 
 function Chart({ symbol, live }: { symbol: string; live?: number }) {
   const box = useRef<HTMLDivElement>(null)
   const chart = useRef<IChartApi | null>(null)
   const series = useRef<ISeriesApi<'Candlestick' | 'Line'> | null>(null)
+  const drawn = useRef<Candle[] | null>(null)
   const last = useRef<Candle | null>(null)
   const [range, setRange] = useState<Range>('1D')
   const [kind, setKind] = useState<'candles' | 'line'>('candles')
-  const [state, setState] = useState<'loading' | 'ok' | 'error'>('loading')
+  const [data, setData] = useState<Candle[] | null>(null)
+  const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     const c = createChart(box.current!, {
@@ -26,31 +28,41 @@ function Chart({ symbol, live }: { symbol: string; live?: number }) {
       rightPriceScale: { borderVisible: false }, timeScale: { borderVisible: false, timeVisible: true, secondsVisible: false },
     })
     chart.current = c
-    return () => { c.remove(); chart.current = null }
+    return () => { c.remove(); chart.current = null; series.current = null; drawn.current = null }
   }, [])
 
-  useEffect(() => {
-    let live = true
-    setState('loading')
-    candles(symbol, range).then(data => {
-      if (!live || !chart.current) return
-      if (series.current) chart.current.removeSeries(series.current)
-      const t = (x: Candle) => (x.t + IST) as UTCTimestamp
-      if (kind === 'candles') {
-        const s = chart.current.addSeries(CandlestickSeries, { upColor: '#2f7a45', downColor: '#c41c29', borderVisible: false, wickUpColor: '#2f7a45', wickDownColor: '#c41c29' })
-        s.setData(data.map(x => ({ time: t(x), open: x.o, high: x.h, low: x.l, close: x.c })))
-        series.current = s
-      } else {
-        const s = chart.current.addSeries(LineSeries, { color: '#1d5fd6', lineWidth: 2 })
-        s.setData(data.map(x => ({ time: t(x), value: x.c })))
-        series.current = s
-      }
-      last.current = data.at(-1) ?? null
-      chart.current.timeScale().fitContent()
-      setState(data.length ? 'ok' : 'error')
-    }).catch(() => live && setState('error'))
-    return () => { live = false }
-  }, [symbol, range, kind])
+  useEffect(() => { // Fetch only when the stock or time range changes; the old chart stays up meanwhile.
+    let current = true
+    candles(symbol, range)
+      .then(d => { if (current) { setFailed(!d.length); if (d.length) setData(d) } })
+      .catch(() => { if (current) setFailed(true) })
+    return () => { current = false }
+  }, [symbol, range])
+
+  useEffect(() => { // Fill the other time ranges in the background so switching feels instant.
+    const t = setTimeout(() => (['5D', '1M', '6M', '1Y', '5Y'] as Range[]).forEach(r => candles(symbol, r).catch(() => {})), 400)
+    return () => clearTimeout(t)
+  }, [symbol])
+
+  useEffect(() => { // Candles vs line reuses the same data and keeps the same view.
+    const c = chart.current
+    if (!c || !data) return
+    const view = drawn.current === data ? c.timeScale().getVisibleLogicalRange() : null
+    if (series.current) c.removeSeries(series.current)
+    const t = (x: Candle) => (x.t + IST) as UTCTimestamp
+    if (kind === 'candles') {
+      const s = c.addSeries(CandlestickSeries, { upColor: '#2f7a45', downColor: '#c41c29', borderVisible: false, wickUpColor: '#2f7a45', wickDownColor: '#c41c29' })
+      s.setData(data.map(x => ({ time: t(x), open: x.o, high: x.h, low: x.l, close: x.c })))
+      series.current = s
+    } else {
+      const s = c.addSeries(LineSeries, { color: '#1d5fd6', lineWidth: 2 })
+      s.setData(data.map(x => ({ time: t(x), value: x.c })))
+      series.current = s
+    }
+    if (view) c.timeScale().setVisibleLogicalRange(view); else c.timeScale().fitContent()
+    drawn.current = data
+    last.current = { ...data[data.length - 1] }
+  }, [data, kind])
 
   useEffect(() => { // Grow the newest candle with each price tick.
     const c = last.current
@@ -58,7 +70,7 @@ function Chart({ symbol, live }: { symbol: string; live?: number }) {
     const time = (c.t + IST) as UTCTimestamp
     c.h = Math.max(c.h, live); c.l = Math.min(c.l, live); c.c = live
     series.current.update(kind === 'candles' ? { time, open: c.o, high: c.h, low: c.l, close: live } : { time, value: live })
-  }, [live, range, kind])
+  }, [live, range, kind, data])
 
   return (
     <section className="card chart">
@@ -70,7 +82,7 @@ function Chart({ symbol, live }: { symbol: string; live?: number }) {
         </span>
       </div>
       <div className="chart-box" ref={box}>
-        {state === 'error' && <p className="chart-note">Bully couldn’t fetch this chart. Try another time range.</p>}
+        {failed && <p className="chart-note">Bully couldn’t fetch this chart. Try another time range.</p>}
       </div>
     </section>
   )
@@ -143,7 +155,7 @@ function Ticket({ uid, p, symbol, price, open }: { uid: string; p: Portfolio; sy
       </div>
       <dl className="rows">
         <div><dt><Term k="margin">Deposit needed</Term></dt><dd className="num">{at ? money(deposit) : '—'}</dd></div>
-        <div><dt><Term k="available">Free to use</Term></dt><dd className="num"><Num value={s.available} /></dd></div>
+        <div><dt><Term k="available">Free</Term></dt><dd className="num"><Num value={s.available} /></dd></div>
       </dl>
       <AnimatePresence initial={false}>
         {isShort && (
@@ -167,8 +179,7 @@ export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: s
   const [info, setInfo] = useState<Info | null>(null)
   const [infoFailed, setInfoFailed] = useState(false)
   useEffect(() => {
-    setInfo(null); setInfoFailed(false)
-    api<Info>('stock?symbol=' + encodeURIComponent(symbol)).then(setInfo).catch(() => setInfoFailed(true))
+    stockInfo(symbol).then(setInfo).catch(() => setInfoFailed(true))
   }, [symbol])
 
   const prices = Object.fromEntries(Object.values(q.bySym).map(x => [x.symbol, x.price]))
@@ -177,7 +188,6 @@ export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: s
   const change = quote ? quote.price - quote.prev : 0
   const name = info?.name ?? nameOf(symbol)
   const specs = ['Mkt. cap', 'P/E ratio', 'Dividend', '52-wk high', '52-wk low', 'Volume', 'EPS'].filter(k => info?.specs[k])
-  const SPEC_WORDS: Record<string, string> = { 'Mkt. cap': 'Company size', 'P/E ratio': 'Price vs profit', Dividend: 'Thank-you money', '52-wk high': 'Year’s highest', '52-wk low': 'Year’s lowest', Volume: 'Traded today', EPS: 'Profit per share' }
 
   return (
     <div className="stock">
@@ -189,10 +199,10 @@ export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: s
         <section className="card strip" aria-label="Your account">
           <div><Term k="balance">Your money</Term><b className="num"><Num value={s.balance} /></b></div>
           <div><Term k="worth">Total worth</Term><b className="num"><Num value={s.equity} /></b></div>
-          <div><Term k="realized">Locked-in</Term><b className={'num ' + tone(s.realized)}><Num value={s.realized} format={signedMoney} /></b></div>
-          <div><Term k="unrealized">Still moving</Term><b className={'num ' + tone(s.unrealized)}><Num value={s.unrealized} format={signedMoney} /></b></div>
+          <div><Term k="realized">Locked in</Term><b className={'num ' + tone(s.realized)}><Num value={s.realized} format={signedMoney} /></b></div>
+          <div><Term k="unrealized">Still open</Term><b className={'num ' + tone(s.unrealized)}><Num value={s.unrealized} format={signedMoney} /></b></div>
           <div><Term k="margin">Deposit</Term><b className="num"><Num value={s.margin} /></b></div>
-          <div><Term k="available" end>Free to use</Term><b className="num"><Num value={s.available} /></b></div>
+          <div><Term k="available" end>Free</Term><b className="num"><Num value={s.available} /></b></div>
         </section>
       </div>
       <aside className="stock-side">
@@ -213,7 +223,7 @@ export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: s
           ))}</dl> : <p className="muted">{infoFailed || info ? 'No facts for this one right now.' : 'Looking these up…'}</p>}
         </section>
         <section className="card">
-          <h2>In the news</h2>
+          <h2>News about {symbol.replace('.NS', '')}</h2>
           {info?.news.length ? <ul className="news">{info.news.map(n => (
             <li key={n.url}><a href={n.url} target="_blank" rel="noreferrer"><b>{n.title}</b><small>{n.source} · {n.when}</small></a></li>
           ))}</ul> : <p className="muted">{infoFailed || info ? 'No news for this one right now.' : 'Fetching the headlines…'}</p>}

@@ -5,7 +5,8 @@ import {
   GoogleAuthProvider, createUserWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEmail,
   signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile, type User,
 } from 'firebase/auth'
-import { POPULAR, api, auth, candles, mutate, nameOf, savePortfolio, useQuotes, usePortfolios } from './data'
+import { POPULAR, api, auth, candles, mutate, nameOf, preload, savePortfolio, useQuotes, usePortfolios } from './data'
+import { Discover } from './Discover'
 import { cancelOrder, fill, newPortfolio, settle, summary, type Portfolio } from './engine'
 import { Stock } from './Stock'
 import { Bully, Modal, Num, Tabs, Term, Tick, Toaster, money, signedMoney, spring, tone, useToast } from './ui'
@@ -59,7 +60,10 @@ function Login() {
           {msg && <p className="note bad" role="alert">{msg}</p>}
           <motion.button className="primary buy" whileTap={{ scale: 0.97 }}>{mode === 'up' ? 'Start trading' : 'Log in'}</motion.button>
         </form>
-        <button className="ghost" onClick={() => signInWithPopup(auth, new GoogleAuthProvider()).catch(fail)}>Continue with Google</button>
+        <button className="ghost" onClick={() => signInWithPopup(auth, new GoogleAuthProvider()).catch(fail)}>
+          <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.7 1.2 9.2 3.6l6.9-6.9C35.9 2.4 30.5 0 24 0 14.6 0 6.5 5.4 2.6 13.2l8 6.2C12.5 13.6 17.8 9.5 24 9.5z" /><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.1-.4-4.5H24v9h12.7c-.5 2.9-2.2 5.4-4.6 7l7.2 5.6c4.2-3.9 7.2-9.6 7.2-17.1z" /><path fill="#FBBC05" d="M10.5 28.6c-.5-1.4-.8-3-.8-4.6s.3-3.2.8-4.6l-8-6.2C.9 16.5 0 20.1 0 24s.9 7.5 2.6 10.8l7.9-6.2z" /><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.2-5.6c-2.2 1.5-5 2.4-8.7 2.4-6.2 0-11.5-4.1-13.4-9.8l-8 6.2C6.5 42.6 14.6 48 24 48z" /></svg>
+          Continue with Google
+        </button>
         <p className="muted">
           <button className="link" onClick={() => { setMode(mode === 'up' ? 'in' : 'up'); setMsg('') }}>{mode === 'up' ? 'I already have an account' : 'I need a new account'}</button>
           {mode === 'in' && <> · <button className="link" onClick={() => email ? sendPasswordResetEmail(auth, email).then(() => setMsg('Check your email for a reset link.')).catch(fail) : setMsg('Type your email first.')}>Forgot password</button></>}
@@ -129,16 +133,16 @@ function Home({ uid, p }: { uid: string; p: Portfolio }) {
           <div><Term k="worth">Total worth</Term><b className="answer"><Num value={s.equity} /></b></div>
           <Bully size={72} mood={s.equity < p.start ? 'hmm' : 'happy'} />
         </div>
-        <div className="jar" role="img" aria-label={`Free to use ${money(s.available)}, deposit ${money(s.margin)}, waiting orders ${money(s.ordersMargin)}`}>
+        <div className="jar" role="img" aria-label={`Free ${money(s.available)}, deposit ${money(s.margin)}, on hold ${money(s.ordersMargin)}`}>
           {parts.map(([k, v]) => v > 0 && <motion.i key={k} className={k} initial={false} animate={{ flexGrow: v / total }} transition={spring} />)}
         </div>
         <dl className="legend">
-          <div><dt><i className="free" /><Term k="available">Free to use</Term></dt><dd className="num"><Num value={s.available} /></dd></div>
-          <div><dt><i className="dep" /><Term k="margin">Deposit on open trades</Term></dt><dd className="num"><Num value={s.margin} /></dd></div>
-          <div><dt><i className="hold" /><Term k="ordersMargin">Held for waiting orders</Term></dt><dd className="num"><Num value={s.ordersMargin} /></dd></div>
+          <div><dt><i className="free" /><Term k="available">Free</Term></dt><dd className="num"><Num value={s.available} /></dd></div>
+          <div><dt><i className="dep" /><Term k="margin">Deposit</Term></dt><dd className="num"><Num value={s.margin} /></dd></div>
+          <div><dt><i className="hold" /><Term k="ordersMargin">On hold</Term></dt><dd className="num"><Num value={s.ordersMargin} /></dd></div>
           <div><dt><Term k="balance">Your money</Term></dt><dd className="num"><Num value={s.balance} /></dd></div>
-          <div><dt><Term k="realized">Locked-in wins and losses</Term></dt><dd className={'num ' + tone(s.realized)}><Num value={s.realized} format={signedMoney} /></dd></div>
-          <div><dt><Term k="unrealized" end>Still-moving wins and losses</Term></dt><dd className={'num ' + tone(s.unrealized)}><Num value={s.unrealized} format={signedMoney} /></dd></div>
+          <div><dt><Term k="realized">Locked in</Term></dt><dd className={'num ' + tone(s.realized)}><Num value={s.realized} format={signedMoney} /></dd></div>
+          <div><dt><Term k="unrealized" end>Still open</Term></dt><dd className={'num ' + tone(s.unrealized)}><Num value={s.unrealized} format={signedMoney} /></dd></div>
         </dl>
         <p className="muted small-note">You can trade up to twice your money. <Term k="marginCall">What if I lose too much?</Term></p>
       </section>
@@ -201,7 +205,7 @@ function Stocks() {
         {rows.length === 0 && <Empty text={`Bully couldn’t find “${text}” on the NSE. Try another name.`} />}
         {rows.map(r => {
           const x = q.bySym[r.symbol]; const pct = x ? (x.price - x.prev) / x.prev * 100 : 0
-          return <a key={r.symbol} href={'#/stock/' + r.symbol}>
+          return <a key={r.symbol} href={'#/stock/' + r.symbol} onPointerEnter={() => preload(r.symbol)}>
             <span className="mono-mark" style={{ background: `hsl(${[...r.symbol].reduce((a, c) => a + c.charCodeAt(0) * 7, 0) % 360} 70% 92%)`, color: `hsl(${[...r.symbol].reduce((a, c) => a + c.charCodeAt(0) * 7, 0) % 360} 70% 25%)` }}>{r.name[0]}</span>
             <span><b>{r.name}</b><small>{r.symbol.replace('.NS', '')}</small></span>
             {x && <span className="r"><Tick value={x.price} /><small className={'num ' + tone(pct)}>{pct >= 0 ? '+' : ''}{pct.toFixed(2)}%</small></span>}
@@ -252,7 +256,7 @@ function Shell({ user }: { user: User }) {
   const pick = (id: string) => { setPid(id); setAdding(false); try { localStorage.setItem('pid', id) } catch { /* private window */ } }
   useSettler(user.uid, p)
   const stockSym = hash.startsWith('#/stock/') ? decodeURIComponent(hash.slice(8)) : ''
-  const route = stockSym ? 'stock' : hash === '#/stocks' ? 'stocks' : 'home'
+  const route = stockSym ? 'stock' : hash === '#/stocks' ? 'stocks' : hash === '#/discover' ? 'discover' : 'home'
 
   return (
     <div className="shell">
@@ -265,7 +269,7 @@ function Shell({ user }: { user: User }) {
           </select>
         </label>
         <LayoutGroup>
-          {[['#/', 'My money', route === 'home'], ['#/stocks', 'Stocks', route !== 'home']].map(([h, label, on]) => (
+          {[['#/', 'My money', route === 'home'], ['#/stocks', 'Stocks', route === 'stocks' || route === 'stock'], ['#/discover', 'Discover', route === 'discover']].map(([h, label, on]) => (
             <a key={h as string} href={h as string} className={'nav' + (on ? ' on' : '')} aria-current={on ? 'page' : undefined}>
               {on && <motion.i layoutId="nav" transition={spring} />}<span>{label}</span>
             </a>
@@ -275,13 +279,12 @@ function Shell({ user }: { user: User }) {
       </nav>
       <main className="canvas">
         {list === null ? <div className="boot"><Bully size={72} /><p className="muted">Opening your piggy bank…</p></div> : p && (
-          <AnimatePresence mode="wait" initial={false}>
-            <motion.div key={route + stockSym + p.id} initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, transition: { duration: 0.1 } }} transition={{ duration: 0.22, ease: [0.23, 1, 0.32, 1] }}>
-              {route === 'home' && <Home uid={user.uid} p={p} />}
-              {route === 'stocks' && <Stocks />}
-              {route === 'stock' && <Stock uid={user.uid} p={p} symbol={stockSym} />}
-            </motion.div>
-          </AnimatePresence>
+          <>
+            {route === 'home' && <Home uid={user.uid} p={p} />}
+            {route === 'stocks' && <Stocks />}
+            {route === 'discover' && <Discover />}
+            {route === 'stock' && <Stock key={stockSym + p.id} uid={user.uid} p={p} symbol={stockSym} />}
+          </>
         )}
       </main>
       <AnimatePresence>

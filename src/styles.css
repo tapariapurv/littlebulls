@@ -143,3 +143,17 @@ td a:hover b { color: var(--accent) } td b { font-weight: 600; transition: color
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; scroll-behavior: auto !important } .tick.up, .tick.down { animation-duration: 300ms } }
 .home, .stock-main, .stock-side { grid-template-columns: minmax(0, 1fr) }
 @media (max-width: 760px) { .brand { font-size: 18px } .nav { padding: 6px 10px; font-size: 15px } .me .link { font-size: 13px } .side { gap: 2px } .switch { margin-top: 6px } }
+.switch select { appearance: none; padding: 0 36px 0 12px; background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1.5l5 5 5-5' fill='none' stroke='%235c6064' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") no-repeat right 14px center; text-overflow: ellipsis }
+.ghost { display: inline-flex; align-items: center; justify-content: center; gap: 10px }
+
+/* Discover */
+.discover { display: grid; gap: var(--gap); grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: start; max-width: 1180px }
+.discover > .title, .discover > .pulse { grid-column: 1 / -1; margin: 0 }
+.pulse { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px } .pulse b { display: block; font-size: 24px; font-weight: 600 } .pulse small { font-size: 14px }
+.discover .stock-list { padding: 0; margin-top: 8px; min-height: 372px } .discover .stock-list > a { padding: 8px } .discover .note { margin-top: 12px }
+.picks { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px }
+.pick { position: relative } .pick input { margin: 0 } .pick ul { position: absolute; z-index: 20; top: 100%; left: 0; right: 0; margin-top: 4px; padding: 4px; list-style: none; background: var(--surface); border-radius: 12px; box-shadow: 0 8px 24px rgb(10 58 128 / .2) }
+.pick li button { width: 100%; padding: 8px 10px; text-align: left; border-radius: 8px; font-size: 14px; font-weight: 600 } .pick li button:hover { background: var(--raised) }
+.compare th, .compare td { white-space: normal } .compare td:first-child { color: var(--muted) } .win { font-weight: 700 }
+@media (max-width: 1080px) { .discover { grid-template-columns: minmax(0, 1fr) } .discover .stock-list { min-height: 0 } }
+@media (max-width: 760px) { .brand span { display: none } .pulse { grid-template-columns: minmax(0, 1fr) } .pulse > div { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap } .pulse b { font-size: 18px } }
