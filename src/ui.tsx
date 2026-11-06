@@ -110,7 +110,16 @@ export function Tabs<T extends string>({ id, value, onChange, options }: { id: s
   )
 }
 
+/** Keeps a price box to a number a person could mean: digits and one dot. */
+export const decimal = (s: string) => s.replace(/[^\d.]/g, '').replace(/(\..*)\./g, '$1')
+
 export function Modal({ children, onClose, label }: { children: ReactNode; onClose?: () => void; label: string }) {
+  useEffect(() => {
+    if (!onClose) return
+    const esc = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    addEventListener('keydown', esc)
+    return () => removeEventListener('keydown', esc)
+  }, [onClose])
   return (
     <motion.div className="scrim" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
       <motion.div role="dialog" aria-label={label} className="modal" onClick={e => e.stopPropagation()}
@@ -125,13 +134,20 @@ type Toast = { id: number; title: string; body?: string; mood?: 'happy' | 'hmm' 
 const Ctx = createContext<(t: Omit<Toast, 'id'>) => void>(() => {})
 export const useToast = () => useContext(Ctx)
 
+let toastId = 0
+
 export function Toaster({ children }: { children: ReactNode }) {
   const [list, setList] = useState<Toast[]>([])
   const push = (t: Omit<Toast, 'id'>) => {
-    const id = Date.now()
+    const id = ++toastId
     setList(l => [...l, { ...t, id }])
     setTimeout(() => setList(l => l.filter(x => x.id !== id)), 4500)
   }
+  useEffect(() => { // Saving is often fire-and-forget, so a failed save is caught here rather than vanishing silently.
+    const failed = (e: PromiseRejectionEvent) => { if (e.reason?.name === 'FirebaseError') push({ title: 'That didn’t go through', body: 'Check your internet and try again.', mood: 'hmm' }) }
+    addEventListener('unhandledrejection', failed)
+    return () => removeEventListener('unhandledrejection', failed)
+  }, [])
   return (
     <Ctx.Provider value={push}>
       {children}

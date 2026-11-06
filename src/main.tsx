@@ -1,18 +1,23 @@
-import { StrictMode, useEffect, useState, useSyncExternalStore, type FormEvent } from 'react'
+import { StrictMode, Suspense, lazy, useEffect, useRef, useState, useSyncExternalStore, type FormEvent } from 'react'
 import { createRoot } from 'react-dom/client'
 import { AnimatePresence, LayoutGroup, MotionConfig, motion } from 'motion/react'
 import {
   GoogleAuthProvider, createUserWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEmail,
   signInWithEmailAndPassword, signInWithPopup, updateProfile, type User,
 } from 'firebase/auth'
-import { api, auth, blip, candles, mutate, nameOf, notify, preload, remember, savePortfolio, screen, search, useQuotes, usePortfolios, useSettings, type Row } from './data'
-import { Discover } from './Discover'
+import { api, auth, blip, candles, mutate, nameOf, notify, preload, savePortfolio, screen, useQuotes, usePortfolios, useSearch, useSettings, type Row } from './data'
 import { cancelOrder, clearAlerts, firedAlerts, marketOrder, newPortfolio, settle, summary, type Portfolio } from './engine'
 import { EXCHANGES, exchange, short } from './markets'
 import { Analytics, History, Icon, SettingsPage, Watchlist } from './More'
-import { Stock } from './Stock'
 import { Bully, Empty, Modal, Num, Tabs, Term, Tick, Toaster, money, setCurrency, signedMoney, spring, tone, useToast } from './ui'
 import './styles.css'
+
+// The chart library is big, so it arrives after login, in the background, before a stock is opened.
+const loadStock = () => import('./Stock')
+const Stock = lazy(() => loadStock().then(m => ({ default: m.Stock })))
+const Discover = lazy(() => import('./Discover').then(m => ({ default: m.Discover })))
+// A tab left open across a new release asks for files that are gone; reloading picks up the new ones.
+addEventListener('vite:preloadError', () => location.reload())
 
 const useHash = () => useSyncExternalStore(cb => {
   addEventListener('hashchange', cb)
@@ -51,7 +56,7 @@ function Login() {
       <section className="login-art">
         <motion.div initial={{ scale: 0.9, rotate: -4 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: 'spring', bounce: 0.5, duration: 0.7 }}><Bully size={168} /></motion.div>
         <h1>LittleBulls<small>Paper trading for kids</small></h1>
-        <p>Learn the stock market with real prices and pretend money. Nobody can lose a real rupee here.</p>
+        <p>Learn the stock market with real prices and pretend money. Nobody can lose real money here.</p>
       </section>
       <section className="login-form">
         <h2>{mode === 'up' ? 'Make your account' : 'Welcome back'}</h2>
@@ -82,11 +87,15 @@ function NewPortfolio({ uid, onDone, onClose, first }: { uid: string; onDone: (i
   const m = exchange(ex)
   const big = { JPY: 10, KRW: 100, IDR: 1000 }[m.currency] ?? 1 // so the chips mean roughly the same in every currency
   const fmt = new Intl.NumberFormat(m.locale, { style: 'currency', currency: m.currency, maximumFractionDigits: 0 })
-  async function submit(e: FormEvent) {
+  const busy = useRef(false) // a ref because a double click can land before React redraws, and would make two portfolios
+  const toast = useToast()
+  function submit(e: FormEvent) {
     e.preventDefault()
+    if (busy.current) return
+    busy.current = true
     const p = newPortfolio(name.trim(), amount, ex)
-    await savePortfolio(uid, p)
-    onDone(p.id)
+    onDone(p.id) // the database shows a new portfolio to this tab at once; the save carries on behind it
+    savePortfolio(uid, p).catch(() => { busy.current = false; toast({ title: 'That didn’t go through', body: 'Check your internet and try again.', mood: 'hmm' }) })
   }
   return (
     <Modal onClose={onClose} label="New portfolio">
@@ -191,24 +200,16 @@ function Home({ uid, p }: { uid: string; p: Portfolio }) {
 
 function Stocks({ ex }: { ex: string }) {
   const [text, setText] = useState('')
-  const [found, setFound] = useState<Row[] | null>(null)
+  const found = useSearch(text, ex)
   const [giants, setGiants] = useState<Row[]>([])
   useEffect(() => { screen('giants', ex, 15).then(setGiants).catch(() => {}) }, [ex])
-  useEffect(() => {
-    if (text.trim().length < 2) { setFound(null); return }
-    const t = setTimeout(() => search(text, ex).then(r => {
-      r.forEach(x => remember(x.symbol, x.name))
-      if (r[0]) preload(r[0].symbol) // the likely pick is ready before it's tapped
-      setFound(r)
-    }).catch(() => setFound([])), 200)
-    return () => clearTimeout(t)
-  }, [text, ex])
+  useEffect(() => { if (found?.[0]) preload(found[0].symbol) }, [found]) // the likely pick is ready before it's tapped
   const rows = found ?? giants
   const q = useQuotes(rows.slice(0, 20).map(r => r.symbol))
   return (
     <div className="stocks">
       <header className="title"><div><h1>Stocks</h1><p className="muted">Companies on {exchange(ex).name}.</p></div></header>
-      <input className="search" autoFocus type="search" aria-label="Search for a stock" placeholder="Search a company or ticker" value={text} onChange={e => setText(e.target.value)} />
+      <input className="search" type="search" aria-label="Search for a stock" placeholder="Search a company or ticker" value={text} onChange={e => setText(e.target.value)} />
       <section className="card stock-list">
         {found?.length === 0 && <Empty text={`Bully couldn’t find “${text}” on ${exchange(ex).name}. Try another name.`} />}
         {rows.map(r => {
@@ -227,25 +228,40 @@ function Stocks({ ex }: { ex: string }) {
 /** Fills waiting orders and checks for margin calls, even for trades placed days ago. */
 function useSettler(uid: string, p: Portfolio | undefined) {
   const toast = useToast()
-  const key = p ? p.id + p.orders.length + Object.keys(p.positions).length + p.alerts.length : ''
+  const latest = useRef(p)
+  latest.current = p
+  const key = p ? [p.id, ...p.orders.map(o => o.id), ...Object.keys(p.positions), ...p.alerts.map(a => a.id)].join() : ''
   useEffect(() => {
     if (!p || (!p.orders.length && !p.alerts.length && !Object.keys(p.positions).length)) return
+    let wait = 0
     const run = async () => {
-      const orderSyms = [...new Set(p.orders.map(o => o.sym))]
-      const syms = [...new Set([...orderSyms, ...Object.keys(p.positions), ...p.alerts.map(a => a.sym)])]
+      const now = latest.current!
+      // Only alerts and orders need a hidden tab to keep working. A closed market can't reach anything, so it's checked rarely.
+      if (Date.now() < wait || (document.hidden && !now.orders.length && !now.alerts.length)) return
+      const orderSyms = [...new Set(now.orders.map(o => o.sym))]
+      const syms = [...new Set([...orderSyms, ...Object.keys(now.positions), ...now.alerts.map(a => a.sym)])]
+      const oldest = (s: string) => Math.min(...now.orders.filter(o => o.sym === s).map(o => o.at))
       const [hist, quotes] = await Promise.all([
-        Promise.all(orderSyms.map(s => candles(s, 'orders'))),
-        api<{ quotes: { symbol: string; price: number }[] }>('quote?symbols=' + encodeURIComponent(syms.join(','))),
+        Promise.all(orderSyms.map(async s => {
+          const recent = await candles(s, 'orders') // small candles only go back a few days, so older orders also check daily ones
+          return Date.now() - oldest(s) < 4 * 86400000 ? recent : [...await candles(s, '6M'), ...recent].sort((a, b) => a.t - b.t)
+        })),
+        api<{ open: boolean; quotes: { symbol: string; price: number }[] }>('quote?symbols=' + encodeURIComponent(syms.slice(0, 40).join(','))),
       ])
+      wait = quotes.open ? 0 : Date.now() + 300000
       const byS = Object.fromEntries(orderSyms.map((s, i) => [s, hist[i]]))
       const prices = Object.fromEntries(quotes.quotes.map(x => [x.symbol, x.price]))
+      const change = (c: Portfolio) => {
+        const next = settle(c, byS, prices), hits = firedAlerts(next ?? c, prices)
+        return { next: hits.length ? clearAlerts(next ?? c, hits) : next, settled: next, hits }
+      }
+      if (!change(now).next) return // nothing happened, which is nearly always, so no database read is spent finding that out
       let before = 0, after = 0, forced = false, fired: Portfolio['alerts'] = []
-      await mutate(uid, p.id, c => {
-        const next = settle(c, byS, prices)
-        before = c.trades.length; after = next?.trades.length ?? before; forced = !!next?.trades[0]?.forced
-        fired = firedAlerts(next ?? c, prices)
-        return fired.length ? clearAlerts(next ?? c, fired) : next
-      })
+      await mutate(uid, now.id, c => {
+        const { next, settled, hits } = change(c)
+        before = c.trades.length; after = settled?.trades.length ?? before; forced = !!settled?.trades[0]?.forced; fired = hits
+        return next
+      }, false)
       for (const a of fired) {
         const body = `${nameOf(a.sym)} reached ${money(a.price)}.`
         toast({ title: 'Your alert went off', body, mood: 'wow' })
@@ -275,7 +291,8 @@ function Shell({ user }: { user: User }) {
   const pick = (id: string) => { setPid(id); setAdding(false); try { localStorage.setItem('pid', id) } catch { /* private window */ } }
   useSettler(user.uid, p)
   const stockSym = hash.startsWith('#/stock/') ? decodeURIComponent(hash.slice(8)) : ''
-  const route = stockSym ? 'stock' : hash.slice(2) || 'home'
+  const route = stockSym ? 'stock' : NAV.some(([id]) => id === hash.slice(2)) ? hash.slice(2) : 'home'
+  useEffect(() => { loadStock().catch(() => {}) }, [])
   const m = p ? exchange(p.exchange) : null
   if (m) setCurrency(m.currency, m.locale)
 
@@ -305,11 +322,13 @@ function Shell({ user }: { user: User }) {
             {route === 'home' && <Home uid={user.uid} p={p} />}
             {route === 'stocks' && <Stocks key={p.exchange} ex={p.exchange} />}
             {route === 'watchlist' && <Watchlist uid={user.uid} p={p} />}
-            {route === 'discover' && <Discover key={p.exchange} ex={p.exchange} />}
             {route === 'analytics' && <Analytics p={p} />}
             {route === 'history' && <History p={p} />}
             {route === 'settings' && <SettingsPage user={user} p={p} />}
-            {route === 'stock' && <Stock key={stockSym + p.id} uid={user.uid} p={p} symbol={stockSym} />}
+            <Suspense fallback={<div className="boot"><Bully size={72} /></div>}>
+              {route === 'discover' && <Discover key={p.exchange} ex={p.exchange} />}
+              {route === 'stock' && <Stock key={stockSym + p.id} uid={user.uid} p={p} symbol={stockSym} />}
+            </Suspense>
           </>
         )}
       </main>

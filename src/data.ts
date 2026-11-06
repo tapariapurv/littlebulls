@@ -2,7 +2,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react'
 import { initializeApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
 import { collection, deleteDoc, doc, initializeFirestore, onSnapshot, runTransaction, setDoc } from 'firebase/firestore'
-import { hydrate, type Candle, type Portfolio } from './engine'
+import { hydrate, uid as newId, type Candle, type Portfolio } from './engine'
 import { short } from './markets'
 
 // Firebase web config is public by design; firestore.rules is what protects the data.
@@ -17,23 +17,43 @@ const db = initializeFirestore(app, { ignoreUndefinedProperties: true })
 
 const ref = (uid: string, id: string) => doc(db, 'users', uid, 'portfolios', id)
 
+/** Changes still on their way to the database. They're drawn on top of the saved data so a trade shows the moment it's made. */
+type Pending = { id: string; rev: string; fn: (p: Portfolio) => Portfolio | null; saved: boolean }
+let pending: Pending[] = []
+const redraws = new Set<() => void>()
+const redraw = () => redraws.forEach(f => f())
+
 export function usePortfolios(uid: string) {
   const [list, setList] = useState<Portfolio[] | null>(null)
-  useEffect(() => onSnapshot(collection(db, 'users', uid, 'portfolios'), s =>
-    setList(s.docs.map(d => hydrate(d.data())).sort((a, b) => a.createdAt - b.createdAt))), [uid])
-  return list
+  const [, setTick] = useState(0)
+  useEffect(() => {
+    const again = () => setTick(n => n + 1)
+    redraws.add(again)
+    const stop = onSnapshot(collection(db, 'users', uid, 'portfolios'), s => {
+      const docs = s.docs.map(d => hydrate(d.data()))
+      pending = pending.filter(x => !x.saved && !docs.some(d => d.rev === x.rev)) // this data already includes them
+      setList(docs.sort((a, b) => a.createdAt - b.createdAt))
+    })
+    return () => { redraws.delete(again); stop() }
+  }, [uid])
+  return list && pending.length ? list.map(p => pending.reduce((c, x) => x.id === c.id ? x.fn(c) ?? c : c, p)) : list
 }
 
 export const savePortfolio = (uid: string, p: Portfolio) => setDoc(ref(uid, p.id), p)
 export const deletePortfolio = (uid: string, id: string) => deleteDoc(ref(uid, id))
 
-/** Money changes run in a transaction so two open tabs can't fill the same order twice. */
-export const mutate = (uid: string, id: string, fn: (p: Portfolio) => Portfolio | null) =>
-  runTransaction(db, async t => {
+/** Money changes run in a transaction so two open tabs can't fill the same order twice. The promise says when it's saved. */
+export function mutate(uid: string, id: string, fn: (p: Portfolio) => Portfolio | null, instant = true) {
+  const entry: Pending = { id, rev: newId(), fn, saved: false }
+  const drop = () => { pending = pending.filter(x => x !== entry); redraw() }
+  if (instant) { pending.push(entry); redraw() }
+  return runTransaction(db, async t => {
     const s = await t.get(ref(uid, id))
     const next = s.exists() ? fn(hydrate(s.data())) : null
-    if (next) t.set(ref(uid, id), next)
-  })
+    if (next) t.set(ref(uid, id), { ...next, rev: entry.rev })
+    return !!next
+  }).then(changed => { if (changed) entry.saved = true; else drop() }, e => { drop(); throw e })
+}
 
 export async function api<T>(path: string): Promise<T> {
   const r = await fetch('/api/' + path)
@@ -52,29 +72,39 @@ export function cached<T>(path: string, ttl: number): Promise<T> {
   return value
 }
 
-export type Quote = { symbol: string; name: string; price: number; prev: number }
-export type Quotes = { open: boolean; bySym: Record<string, Quote>; failed: boolean }
+export type Quote = { symbol: string; name: string; price: number; prev: number; open: boolean }
+type Quotes = { bySym: Record<string, Quote>; failed: boolean }
 
-let lastQuotes: Quotes = { open: false, bySym: {}, failed: false } // shown instantly when moving between pages
+let lastQuotes: Quotes = { bySym: {}, failed: false } // shown instantly when moving between pages
+const POLL = 15000, CLOSED_POLL = 60000
 
-export function useQuotes(symbols: string[]): Quotes {
+/** Live prices. Nobody is asked for prices in a hidden tab, and a closed market is asked less often. */
+export function useQuotes(symbols: string[]): Quotes & { open: boolean } {
   const key = [...new Set(symbols)].sort().join(',')
   const [q, setQ] = useState<Quotes>(lastQuotes)
   useEffect(() => {
     if (!key) return
-    let live = true
-    const load = () => api<{ open: boolean; quotes: Quote[] }>('quote?symbols=' + encodeURIComponent(key))
-      .then(r => {
-        r.quotes.forEach(x => remember(x.symbol, x.name))
-        lastQuotes = { open: r.open, failed: false, bySym: { ...lastQuotes.bySym, ...Object.fromEntries(r.quotes.map(x => [x.symbol, x])) } }
-        if (live) setQ(lastQuotes)
-      })
-      .catch(() => live && setQ(old => ({ ...old, failed: true })))
+    let live = true, wait = 0, at = 0
+    const load = () => {
+      at = Date.now()
+      const all = key.split(','), parts = Array.from({ length: Math.ceil(all.length / 40) }, (_, i) => all.slice(i * 40, i * 40 + 40)) // the API takes 40 at a time
+      Promise.all(parts.map(part => api<{ quotes: Quote[] }>('quote?symbols=' + encodeURIComponent(part.join(',')))))
+        .then(rs => {
+          const found = rs.flatMap(r => r.quotes)
+          found.forEach(x => remember(x.symbol, x.name))
+          wait = found.some(x => x.open) ? POLL : CLOSED_POLL
+          lastQuotes = { failed: false, bySym: { ...lastQuotes.bySym, ...Object.fromEntries(found.map(x => [x.symbol, x])) } }
+          if (live) setQ(lastQuotes)
+        })
+        .catch(() => { wait = POLL; if (live) setQ(old => ({ ...old, failed: true })) })
+    }
+    const check = () => { if (!document.hidden && Date.now() - at >= wait - 1000) load() }
     load()
-    const t = setInterval(load, 15000)
-    return () => { live = false; clearInterval(t) }
+    const t = setInterval(check, POLL)
+    document.addEventListener('visibilitychange', check)
+    return () => { live = false; clearInterval(t); document.removeEventListener('visibilitychange', check) }
   }, [key])
-  return q
+  return { ...q, open: symbols.some(s => q.bySym[s]?.open) }
 }
 
 type History = { tz: number; bars: Candle[] }
@@ -101,6 +131,20 @@ export const nameOf = (sym: string) => names[sym] ?? short(sym)
 
 export type Row = { symbol: string; name: string; price?: number | null; pct?: number | null; yield?: number | null; cap?: number | null }
 export const search = (text: string, ex: string) => cached<Row[]>(`search?q=${encodeURIComponent(text.trim())}&ex=${ex}`, 600000)
+/** Search results for what's typed, after a short pause. An older answer arriving late can't replace a newer one. */
+export function useSearch(text: string, ex: string) {
+  const [found, setFound] = useState<Row[] | null>(null)
+  useEffect(() => {
+    if (text.trim().length < 2) { setFound(null); return }
+    let live = true
+    const t = setTimeout(() => search(text, ex).then(r => {
+      r.forEach(x => remember(x.symbol, x.name))
+      if (live) setFound(r)
+    }).catch(() => { if (live) setFound([]) }), 150)
+    return () => { live = false; clearTimeout(t) }
+  }, [text, ex])
+  return found
+}
 export const screen = (list: string, ex: string, n = 8) => cached<Row[]>(`discover?list=${list}&ex=${ex}&n=${n}`, 120000)
   .then(r => { r.forEach(x => remember(x.symbol, x.name)); return r })
 

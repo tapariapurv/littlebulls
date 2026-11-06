@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
-import { candles, preload, screen, search, stockInfo, useQuotes, type Info, type Row } from './data'
-import { exchange, short } from './markets'
-import { SPEC_WORDS } from './Stock'
+import { candles, preload, screen, stockInfo, useQuotes, useSearch, type Info, type Row } from './data'
+import { SPEC_WORDS, exchange, short } from './markets'
 import { Tabs, Term, Tick, money, tone } from './ui'
 
 type List = 'climbers' | 'drops' | 'busiest' | 'giants' | 'payers'
@@ -57,17 +56,13 @@ function Ideas({ ex }: { ex: string }) {
 
 function Pick({ ex, label, value, onPick }: { ex: string; label: string; value: string; onPick: (s: string) => void }) {
   const [text, setText] = useState(short(value))
-  const [found, setFound] = useState<Row[]>([])
-  useEffect(() => {
-    if (text.trim().length < 2 || text === short(value)) { setFound([]); return }
-    const t = setTimeout(() => search(text, ex).then(setFound).catch(() => setFound([])), 200)
-    return () => clearTimeout(t)
-  }, [text, value, ex])
+  const [open, setOpen] = useState(false) // the list only shows after typing, not after a pick fills the box
+  const found = useSearch(open ? text : '', ex) ?? []
   return (
     <div className="pick">
-      <input aria-label={label} value={text} placeholder="Type a company" onChange={e => setText(e.target.value)} onFocus={e => e.target.select()} />
+      <input aria-label={label} value={text} placeholder="Type a company" onChange={e => { setText(e.target.value); setOpen(true) }} onFocus={e => e.target.select()} />
       {found.length > 0 && <ul>{found.slice(0, 5).map(f => (
-        <li key={f.symbol}><button onClick={() => { onPick(f.symbol); setText(short(f.symbol)); setFound([]) }}>{f.name}</button></li>
+        <li key={f.symbol}><button onClick={() => { onPick(f.symbol); setText(short(f.symbol)); setOpen(false) }}>{f.name}</button></li>
       ))}</ul>}
     </div>
   )

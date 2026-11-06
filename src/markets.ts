@@ -3,6 +3,8 @@ export type Market = { id: string; name: string; region: string; suffix: string;
 const m = (id: string, name: string, region: string, suffix: string, currency: string, locale: string, indexes: [string, string][] = []): Market =>
   ({ id, name, region, suffix, currency, locale, indexes })
 
+export const SPEC_WORDS: Record<string, string> = { 'Mkt. cap': 'Company size', 'P/E ratio': 'Price vs profit', Dividend: 'Thank-you money', '52-wk high': 'Year’s highest', '52-wk low': 'Year’s lowest', Volume: 'Traded today', EPS: 'Profit per share' }
+
 export const EXCHANGES: Market[] = [
   m('NSE', 'NSE, India', 'Asia', '.NS', 'INR', 'en-IN', [['^NSEI', 'Nifty 50'], ['^BSESN', 'Sensex'], ['^NSEBANK', 'Bank Nifty']]),
   m('BSE', 'BSE, India', 'Asia', '.BO', 'INR', 'en-IN', [['^BSESN', 'Sensex'], ['^NSEI', 'Nifty 50']]),

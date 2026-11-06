@@ -3,14 +3,15 @@ import { CandlestickSeries, LineSeries, createChart, type IChartApi, type ISerie
 import { AnimatePresence, motion } from 'motion/react'
 import { askToNotify, blip, candles, getSettings, mutate, nameOf, older, setSetting, stockInfo, useQuotes, useSettings, zoneOf, type Info } from './data'
 import { MARGIN, addAlert, addOrder, canAfford, marketOrder, summary, type Candle, type Portfolio, type Side } from './engine'
-import { exchange, matches, short } from './markets'
-import { Bully, Modal, Num, Tabs, Term, Tick, money, signedMoney, spring, tone, useToast } from './ui'
+import { SPEC_WORDS, exchange, matches, short } from './markets'
+import { Bully, Modal, Num, Tabs, Term, Tick, decimal, money, signedMoney, spring, tone, useToast } from './ui'
 
 type Range = '1D' | '5D' | '1M' | '6M' | '1Y' | '5Y'
+// Seconds each candle covers, so a page left open starts new candles rather than stretching the last one.
+const STEP: Record<Range, number> = { '1D': 300, '5D': 1800, '1M': 7200, '6M': 86400, '1Y': 259200, '5Y': 1814400 }
 // How many bars each tab opens on; the larger candle sizes come from the API, and older ones load on scrolling back.
 const BARS: Record<Range, number> = { '1D': 78, '5D': 65, '1M': 78, '6M': 126, '1Y': 84, '5Y': 87 }
 type Line = { price: number; title: string; color: string }
-export const SPEC_WORDS: Record<string, string> = { 'Mkt. cap': 'Company size', 'P/E ratio': 'Price vs profit', Dividend: 'Thank-you money', '52-wk high': 'Year’s highest', '52-wk low': 'Year’s lowest', Volume: 'Traded today', EPS: 'Profit per share' }
 
 function Chart({ symbol, live, lines, buttons }: { symbol: string; live?: number; lines: Line[]; buttons?: React.ReactNode }) {
   const box = useRef<HTMLDivElement>(null)
@@ -96,8 +97,10 @@ function Chart({ symbol, live, lines, buttons }: { symbol: string; live?: number
   }, [data, kind])
 
   useEffect(() => { // Grow the newest candle with each price tick.
-    const c = last.current
+    let c = last.current
     if (!live || !c || !series.current) return
+    const passed = Math.floor((Date.now() / 1000 - c.t) / STEP[range])
+    if (passed > 0) c = last.current = { t: c.t + passed * STEP[range], o: live, h: live, l: live, c: live }
     const time = (c.t + zoneOf(symbol)) as UTCTimestamp
     c.h = Math.max(c.h, live); c.l = Math.min(c.l, live); c.c = live
     series.current.update(kind === 'candles' ? { time, open: c.o, high: c.h, low: c.l, close: live } : { time, value: live })
@@ -138,7 +141,7 @@ function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: 
   const [exits, setExits] = useState(false)
   const [tpText, setTp] = useState('')
   const [slText, setSl] = useState('')
-  const [busy, setBusy] = useState(false)
+  const busy = useRef(false) // a ref because a double click can land before React redraws
   const [shake, setShake] = useState(0)
 
   const prices = price ? { [symbol]: price } : {}
@@ -151,25 +154,26 @@ function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: 
   const tp = exits ? Number(tpText) || undefined : undefined, sl = exits ? Number(slText) || undefined : undefined
   const up = side === 'buy' ? 1 : -1 // a take-win sits past your price in the winning direction, a stop on the other side
   const badExit = at > 0 && ((tp && (tp - at) * up <= 0) || (sl && (sl - at) * up >= 0))
-  const ready = at > 0 && qty > 0 && afford && !busy && !badExit
+  const ready = at > 0 && qty > 0 && afford && !badExit
   const word = side === 'buy' ? 'Buy' : 'Sell'
   const shares = `${qty} ${qty === 1 ? 'share' : 'shares'}`
 
   async function place() {
     if (!ready) { setShake(n => n + 1); return }
-    setBusy(true)
+    if (busy.current) return // a double click isn't two trades
+    busy.current = true
+    setTimeout(() => { busy.current = false }, 400)
     const first = p.trades.length === 0
-    try {
-      await mutate(uid, p.id, cur => type === 'market'
-        ? marketOrder(cur, symbol, side, qty, at, { tp, sl })
-        : addOrder(cur, { sym: symbol, side, qty, type, price: at, tp, sl }))
-      blip()
-      if (type === 'market') toast(first
-        ? { title: 'Your first trade!', body: `${word === 'Buy' ? 'Bought' : 'Sold'} ${shares} at ${money(at)}. Bully is proud of you for trying.`, mood: 'wow' }
-        : { title: `${word === 'Buy' ? 'Bought' : 'Sold'} ${shares}`, body: `At ${money(at)} each.` })
-      else toast({ title: 'Order is waiting', body: `${word} ${shares} when the price reaches ${money(at)}.` })
-    } catch { toast({ title: 'That didn’t go through', body: 'Check your internet and try again.', mood: 'hmm' }) }
-    setBusy(false)
+    // The trade shows straight away while it saves; if the save fails it comes back off the screen and this says so.
+    mutate(uid, p.id, cur => type === 'market'
+      ? marketOrder(cur, symbol, side, qty, at, { tp, sl })
+      : addOrder(cur, { sym: symbol, side, qty, type, price: at, tp, sl }))
+      .catch(() => toast({ title: 'That didn’t go through', body: 'Check your internet and try again.', mood: 'hmm' }))
+    blip()
+    if (type === 'market') toast(first
+      ? { title: 'Your first trade!', body: `${word === 'Buy' ? 'Bought' : 'Sold'} ${shares} at ${money(at)}. Bully is proud of you for trying.`, mood: 'wow' }
+      : { title: `${word === 'Buy' ? 'Bought' : 'Sold'} ${shares}`, body: `At ${money(at)} each.` })
+    else toast({ title: 'Order is waiting', body: `${word} ${shares} when the price reaches ${money(at)}.` })
   }
 
   return (
@@ -196,14 +200,14 @@ function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: 
         </label>
         {type !== 'market' && (
           <label>Your price
-            <input inputMode="decimal" value={typed} placeholder={price?.toFixed(2)} onChange={e => setTyped(e.target.value.replace(/[^\d.]/g, ''))} />
+            <input inputMode="decimal" value={typed} placeholder={price?.toFixed(2)} onChange={e => setTyped(decimal(e.target.value))} />
           </label>
         )}
       </div>
       <label className="check"><input type="checkbox" checked={exits} onChange={e => setExits(e.target.checked)} /> Plan my way out</label>
       {exits && <div className="field-row">
-        <label><Term k="tp">Take my win at</Term><input inputMode="decimal" value={tpText} placeholder="Optional" onChange={e => setTp(e.target.value.replace(/[^\d.]/g, ''))} /></label>
-        <label><Term k="sl" end>Stop my loss at</Term><input inputMode="decimal" value={slText} placeholder="Optional" onChange={e => setSl(e.target.value.replace(/[^\d.]/g, ''))} /></label>
+        <label><Term k="tp">Take my win at</Term><input inputMode="decimal" value={tpText} placeholder="Optional" onChange={e => setTp(decimal(e.target.value))} /></label>
+        <label><Term k="sl" end>Stop my loss at</Term><input inputMode="decimal" value={slText} placeholder="Optional" onChange={e => setSl(decimal(e.target.value))} /></label>
       </div>}
       {badExit && <p className="note bad">{side === 'buy' ? 'When buying, your win goes above the price and your stop goes below it.' : 'When selling first, your win goes below the price and your stop goes above it.'}</p>}
       <dl className="rows">
@@ -218,9 +222,9 @@ function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: 
         )}
       </AnimatePresence>
       {at > 0 && !afford && qty > 0 && <p className="note bad">That’s more than you can use right now. Try fewer shares.</p>}
-      <motion.button key={shake} className={'primary ' + side} onClick={place} disabled={busy || (type === 'market' && !open)}
+      <motion.button key={shake} className={'primary ' + side} onClick={place} disabled={type === 'market' && !open}
         animate={shake ? { x: [0, -6, 6, -3, 3, 0] } : undefined} transition={{ duration: 0.3 }} whileTap={{ scale: 0.97 }}>
-        {busy ? 'Placing…' : `${word} ${shares}`}
+        {`${word} ${shares}`}
       </motion.button>
     </div>
   )
@@ -230,12 +234,12 @@ function Alerts({ uid, p, symbol, price, onClose }: { uid: string; p: Portfolio;
   const toast = useToast()
   const [text, setText] = useState('')
   const mine = p.alerts.filter(a => a.sym === symbol)
-  async function add(e: React.FormEvent) {
+  function add(e: React.FormEvent) {
     e.preventDefault()
     const at = Number(text)
     if (!at || !price) return
     if (!getSettings().notify) askToNotify() // not awaited: the alert shouldn't wait on the browser's permission prompt
-    await mutate(uid, p.id, c => addAlert(c, symbol, at, price))
+    mutate(uid, p.id, c => addAlert(c, symbol, at, price)) // a failed save is caught by the Toaster
     setText('')
     toast({ title: 'Alert set', body: `Bully will tell you when ${nameOf(symbol)} reaches ${money(at)}.` })
   }
@@ -244,7 +248,7 @@ function Alerts({ uid, p, symbol, price, onClose }: { uid: string; p: Portfolio;
       <h2>Tell me when {nameOf(symbol)} reaches</h2>
       <p className="muted">It works while LittleBulls is open, even in another tab. It’s {price ? money(price) : '—'} right now.</p>
       <form onSubmit={add}>
-        <label>Price<input autoFocus required inputMode="decimal" value={text} onChange={e => setText(e.target.value.replace(/[^\d.]/g, ''))} /></label>
+        <label>Price<input autoFocus required inputMode="decimal" value={text} onChange={e => setText(decimal(e.target.value))} /></label>
         <button className="primary buy">Set alert</button>
       </form>
       {mine.length > 0 && <ul className="plain">{mine.map(a => <li key={a.id}><span className="num">{a.above ? 'Up to' : 'Down to'} {money(a.price)}</span>
@@ -260,6 +264,7 @@ export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: s
   const [alerts, setAlerts] = useState(false)
   const q = useQuotes([symbol, ...Object.keys(p.positions)])
   const quote = q.bySym[symbol]
+  const open = !!quote?.open
   const [info, setInfo] = useState<Info | null>(null)
   const [infoFailed, setInfoFailed] = useState(false)
   useEffect(() => {
@@ -274,16 +279,19 @@ export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: s
   const fits = matches(p.exchange, symbol)
   const list = p.watchlists.find(l => l.id === set.list) ?? p.watchlists[0]
   const watching = list.syms.includes(symbol)
+  const busy = useRef(false)
   const toggleWatch = () => mutate(uid, p.id, c => ({ ...c, watchlists: c.watchlists.map(l => l.id === list.id ? { ...l, syms: watching ? l.syms.filter(x => x !== symbol) : [...l.syms, symbol] } : l) }))
     .then(() => { setSetting({ list: list.id }); toast({ title: watching ? `Removed from ${list.name}` : `Added to ${list.name}`, body: name }) })
-  async function quick(side: Side) {
+  function quick(side: Side) {
     if (!quote || !canAfford(p, prices, symbol, side, qty, quote.price)) { toast({ title: 'That’s more than you can use', body: 'Try fewer shares.', mood: 'hmm' }); return }
+    if (busy.current) return // a double click isn't two trades
     if (set.askFirst && !confirm(`${side === 'buy' ? 'Buy' : 'Sell'} ${qty} ${short(symbol)} at about ${money(quote.price)}?`)) return
-    try {
-      await mutate(uid, p.id, c => marketOrder(c, symbol, side, qty, quote.price))
-      blip()
-      toast({ title: `${side === 'buy' ? 'Bought' : 'Sold'} ${qty}`, body: `At ${money(quote.price)} each.` })
-    } catch { toast({ title: 'That didn’t go through', body: 'Check your internet and try again.', mood: 'hmm' }) }
+    busy.current = true
+    setTimeout(() => { busy.current = false }, 400)
+    mutate(uid, p.id, c => marketOrder(c, symbol, side, qty, quote.price))
+      .catch(() => toast({ title: 'That didn’t go through', body: 'Check your internet and try again.', mood: 'hmm' }))
+    blip()
+    toast({ title: `${side === 'buy' ? 'Bought' : 'Sold'} ${qty}`, body: `At ${money(quote.price)} each.` })
   }
   const lines: Line[] = !set.chartLines ? [] : [
     ...(pos ? [{ price: pos.avg, title: `${pos.qty > 0 ? 'You own' : 'You sold'} ${Math.abs(pos.qty)}`, color: '#1d5fd6' }] : []),
@@ -299,13 +307,13 @@ export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: s
     <div className="stock">
       <div className="stock-main">
         <header className="title">
-          <div><h1>{name}</h1><p className="muted">{short(symbol)} · <span className={q.open ? 'open' : ''}>{q.open ? 'Market open' : 'Market closed'}</span></p></div>
+          <div><h1>{name}</h1><p className="muted">{short(symbol)} · <span className={open ? 'open' : ''}>{open ? 'Market open' : 'Market closed'}</span></p></div>
           <span className="title-actions">
             <button className={'ghost tiny' + (watching ? ' on' : '')} aria-pressed={watching} onClick={toggleWatch}>{watching ? '★ Watching' : '☆ Watch'}</button>
             <button className="ghost tiny" onClick={() => setAlerts(true)}>Alert{p.alerts.some(a => a.sym === symbol) ? ` (${p.alerts.filter(a => a.sym === symbol).length})` : ''}</button>
           </span>
         </header>
-        <Chart symbol={symbol} live={q.open ? quote?.price : undefined} lines={lines} buttons={set.chartButtons && fits && q.open && quote ? (
+        <Chart symbol={symbol} live={open ? quote?.price : undefined} lines={lines} buttons={set.chartButtons && fits && open && quote ? (
           <div className="chart-trade">
             <button className="sell" onClick={() => quick('sell')}>Sell {qty}</button>
             <button className="buy" onClick={() => quick('buy')}>Buy {qty}</button>
@@ -329,7 +337,7 @@ export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: s
             <Bully size={44} mood={change < 0 ? 'hmm' : 'happy'} />
           </div>
           {pos && <p className="note holding">You {pos.qty > 0 ? 'own' : 'sold first'} {Math.abs(pos.qty)} at {money(pos.avg)}. <b className={tone((( quote?.price ?? pos.avg) - pos.avg) * pos.qty)}>{signedMoney(((quote?.price ?? pos.avg) - pos.avg) * pos.qty)}</b> so far.</p>}
-          {fits ? <Ticket uid={uid} p={p} symbol={symbol} price={quote?.price} open={q.open} qty={qty} setQty={setQty} />
+          {fits ? <Ticket uid={uid} p={p} symbol={symbol} price={quote?.price} open={open} qty={qty} setQty={setQty} />
             : <p className="note">This portfolio trades on {exchange(p.exchange).name}, and this stock isn’t there. Make another portfolio to trade it.</p>}
         </section>
         <section className="card">

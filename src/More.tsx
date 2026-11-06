@@ -1,7 +1,6 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react'
-import { BaselineSeries, createChart, type UTCTimestamp } from 'lightweight-charts'
+import { Suspense, lazy, useEffect, useState, type FormEvent } from 'react'
 import { sendPasswordResetEmail, signOut, updateProfile, type User } from 'firebase/auth'
-import { askToNotify, auth, deletePortfolio, mutate, nameOf, preload, remember, search, setSetting, useQuotes, useSettings, type Row } from './data'
+import { askToNotify, auth, deletePortfolio, mutate, nameOf, preload, remember, setSetting, useQuotes, useSearch, useSettings } from './data'
 import { analytics, balanceHistory, resetPortfolio, uid as newId, type Portfolio } from './engine'
 import { exchange, short } from './markets'
 import { Empty, Tabs, Term, Tick, money, signedMoney, tone, useToast } from './ui'
@@ -19,6 +18,8 @@ export const Icon = ({ name }: { name: string }) => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICONS[name]} /></svg>
 )
 
+const Curve = lazy(() => import('./Curve')) // the chart library only loads for those who open a chart
+
 const day = (at: number) => new Date(at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })
 const time = (at: number) => `${day(at)}, ${new Date(at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' })}`
 
@@ -28,13 +29,8 @@ export function Watchlist({ uid, p }: { uid: string; p: Portfolio }) {
   const [naming, setNaming] = useState('')
   const [adding, setAdding] = useState(false)
   const [text, setText] = useState('')
-  const [found, setFound] = useState<Row[]>([])
+  const found = useSearch(text, p.exchange) ?? []
   const q = useQuotes(list.syms)
-  useEffect(() => {
-    if (text.trim().length < 2) { setFound([]); return }
-    const t = setTimeout(() => search(text, p.exchange).then(setFound).catch(() => setFound([])), 200)
-    return () => clearTimeout(t)
-  }, [text, p.exchange])
   const change = (id: string, syms: (s: string[]) => string[]) => mutate(uid, p.id, c => ({ ...c, watchlists: c.watchlists.map(l => l.id === id ? { ...l, syms: syms(l.syms) } : l) }))
   function create(e: FormEvent) {
     e.preventDefault()
@@ -76,24 +72,6 @@ export function Watchlist({ uid, p }: { uid: string; p: Portfolio }) {
   )
 }
 
-function Curve({ points }: { points: { at: number; v: number }[] }) {
-  const box = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    const c = createChart(box.current!, {
-      autoSize: true,
-      layout: { background: { color: 'transparent' }, textColor: '#5c6064', fontFamily: 'Manrope', fontSize: 12 },
-      grid: { vertLines: { visible: false }, horzLines: { color: '#eef1f4' } },
-      rightPriceScale: { borderVisible: false }, timeScale: { borderVisible: false }, handleScroll: false, handleScale: false,
-    })
-    const s = c.addSeries(BaselineSeries, { baseValue: { type: 'price', price: 0 }, topLineColor: '#2f7a45', bottomLineColor: '#c41c29', topFillColor1: '#2f7a4533', topFillColor2: '#2f7a4505', bottomFillColor1: '#c41c2905', bottomFillColor2: '#c41c2933' })
-    let last = 0 // two trades in one second still need their own spot on the line
-    s.setData([{ at: points[0].at - 60000, v: 0 }, ...points].map(x => { last = Math.max(last + 1, Math.floor(x.at / 1000)); return { time: last as UTCTimestamp, value: x.v } }))
-    c.timeScale().fitContent()
-    return () => c.remove()
-  }, [points])
-  return <div className="curve" ref={box} />
-}
-
 export function Analytics({ p }: { p: Portfolio }) {
   const a = analytics(p)
   const stats: [string, string, string, string][] = [
@@ -110,7 +88,7 @@ export function Analytics({ p }: { p: Portfolio }) {
       {!a.count ? <section className="card"><Empty text="Finish a trade and Bully will start working out how you’re doing." /></section> : <>
         <section className="card">
           <h2>Wins and losses added up <b className={'num ' + tone(a.total)}>{signedMoney(a.total)}</b></h2>
-          <Curve points={a.curve} />
+          <Suspense fallback={<div className="curve" />}><Curve points={a.curve} /></Suspense>
         </section>
         <section className="stats">{stats.map(([k, label, value, sub]) => (
           <div className="card" key={label}><Term k={k}>{label}</Term><b className="num">{value}</b><small>{sub}</small></div>
