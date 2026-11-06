@@ -48,7 +48,7 @@ function Login() {
     <main className="login">
       <section className="login-art">
         <motion.div initial={{ scale: 0.9, rotate: -4 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: 'spring', bounce: 0.5, duration: 0.7 }}><Bully size={168} /></motion.div>
-        <h1>LittleBulls</h1>
+        <h1>LittleBulls<small>Paper trading for kids</small></h1>
         <p>Learn the stock market with real prices and pretend money. Nobody can lose a real rupee here.</p>
       </section>
       <section className="login-form">
@@ -299,6 +299,7 @@ function Shell({ user }: { user: User }) {
 function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined)
   useEffect(() => onAuthStateChanged(auth, setUser), [])
+  useEffect(() => { document.getElementById('about')!.hidden = !!user }, [user]) // the public page text in index.html
   if (user === undefined) return <div className="boot full"><Bully size={72} /></div>
   return user ? <Shell key={user.uid} user={user} /> : <Login />
 }

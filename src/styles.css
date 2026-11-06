@@ -67,6 +67,12 @@ input:focus { border-color: var(--accent); outline: none }
 .login-art { background: var(--accent-soft); color: var(--accent-ink); display: flex; flex-direction: column; justify-content: center; gap: 16px; padding: 64px }
 .login-art h1 { font-size: clamp(56px, 7vw, 104px) } .login-art p { font-size: 20px; max-width: 30ch }
 .login-form { display: flex; flex-direction: column; justify-content: center; gap: 12px; padding: 48px; max-width: 480px; width: 100%; margin: auto }
+.login-art h1 small { display: block; font-size: clamp(24px, 2.6vw, 34px); margin-top: 4px }
+#root { min-height: 100dvh }
+#about { max-width: 720px; margin: 0 auto; padding: 56px 24px 72px; display: grid; gap: 14px; font-weight: 500 }
+#about[hidden] { display: none }
+#about h2 { font-size: 30px; margin-top: 24px; color: var(--accent-ink) } #about h3 { font: 700 17px/1.4 Manrope, sans-serif; margin-top: 8px }
+#about ul { display: grid; gap: 10px; padding-left: 20px } #about b { font-weight: 700 }
 .login-form h2 { font-size: 28px }
 
 /* Modal and toast */
