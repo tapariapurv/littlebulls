@@ -47,13 +47,19 @@ export function mutate(uid: string, id: string, fn: (p: Portfolio) => Portfolio 
   const entry: Pending = { id, rev: newId(), fn, saved: false }
   const drop = () => { pending = pending.filter(x => x !== entry); redraw() }
   if (instant) { pending.push(entry); redraw() }
-  return runTransaction(db, async t => {
+  // One at a time: changes racing each other to the same document make Firestore retry with growing delays, and then give up.
+  const done = saving.then(() => runTransaction(db, async t => {
     const s = await t.get(ref(uid, id))
     const next = s.exists() ? fn(hydrate(s.data())) : null
     if (next) t.set(ref(uid, id), { ...next, rev: entry.rev })
     return !!next
-  }).then(changed => { if (changed) entry.saved = true; else drop() }, e => { drop(); throw e })
+  })).then(changed => { if (changed) entry.saved = true; else drop() }, e => { drop(); throw e })
+  saving = done.catch(() => {})
+  return done
 }
+let saving: Promise<unknown> = Promise.resolve()
+// The screen shows a trade before it's saved, so leaving in that moment gets the browser's "are you sure?".
+addEventListener('beforeunload', e => { if (pending.some(x => !x.saved)) e.preventDefault() })
 
 export async function api<T>(path: string): Promise<T> {
   const r = await fetch('/api/' + path)
