@@ -115,8 +115,11 @@ def fetch_quote(sym: str):
         # chartPreviousClose is unreliable, so read yesterday's close from the daily bars.
         days = [(t, x) for t, x in zip(c["timestamp"], c["indicators"]["quote"][0]["close"]) if x is not None]
         period = m["currentTradingPeriod"]["regular"]
+        before = days[:-1] if days and days[-1][0] >= period["start"] else days
+        # Yahoo sometimes sends a thinly reported stock with only today's bar.
+        prev = before[-1][1] if before else m.get("chartPreviousClose") or m["regularMarketPrice"]
         return {"symbol": sym, "name": m.get("longName") or m.get("shortName") or sym, "price": m["regularMarketPrice"] / k,
-                "prev": days[-2 if days[-1][0] >= period["start"] else -1][1] / k, "start": period["start"], "end": period["end"]}
+                "prev": prev / k, "start": period["start"], "end": period["end"]}
     except (KeyError, IndexError, TypeError) as e:
         raise requests.RequestException(f"no price for {sym}") from e
 
@@ -200,6 +203,13 @@ def search(q: str, ex: str, res: Response):
         hit = None  # a bare US ticker could be on the other US exchange
     if hit and all(r["symbol"] != ticker for r in rows):
         rows.insert(0, {"symbol": ticker, "name": hit["name"]})
+    if len(rows) < 5:  # Yahoo's top results are worldwide, so a smaller exchange's own listing can miss them
+        try:
+            word, known = text.lower(), {r["symbol"] for r in rows}
+            rows += [{"symbol": x["symbol"], "name": x.get("longName") or x.get("shortName") or x["symbol"]} for x in biggest(ex)
+                     if x["symbol"] not in known and x["symbol"].endswith(suffix) and word in f'{x.get("longName")} {x.get("shortName")}'.lower()][:10]
+        except requests.RequestException:
+            pass  # the list is an extra, so what Yahoo found still goes back
     return rows
 
 
@@ -282,6 +292,10 @@ def screener(codes):
     return r.json()["finance"]["result"][0]["quotes"]
 
 
+def biggest(ex: str):
+    return shared("screen:" + ex, 120, lambda: screener(EXCHANGES[ex][2]), stale=3600)  # all five lists come from this one call
+
+
 @app.get("/api/discover")
 def discover(list: str, ex: str, res: Response, n: int = 8):
     if list not in LISTS or ex not in EXCHANGES:
@@ -289,8 +303,7 @@ def discover(list: str, ex: str, res: Response, n: int = 8):
     suffix = EXCHANGES[ex][0]
     # Ranked within the exchange's biggest companies, which keeps out tiny stocks jumping on almost no trading,
     # and works in every currency, unlike a fixed market cap floor. Other-currency listings are dropped.
-    codes = EXCHANGES[ex][2]
-    rows = shared("screen:" + ex, 120, lambda: screener(codes), stale=3600)  # all five lists come from this one call
+    rows = biggest(ex)
     main = next(iter(Counter(x.get("currency") for x in rows).most_common(1)), (None,))[0]
     rows = [x for x in rows if x.get("currency") == main and x.get("marketCap") and x["symbol"].endswith(suffix)]
     field, desc = LISTS[list]
