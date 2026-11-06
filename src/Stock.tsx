@@ -99,7 +99,7 @@ function Ticket({ uid, p, symbol, price, open }: { uid: string; p: Portfolio; sy
   const [shake, setShake] = useState(0)
 
   const prices = price ? { [symbol]: price } : {}
-  const at = type === 'market' ? price ?? 0 : Number(typed) || 0
+  const at = type === 'market' ? price ?? 0 : Number(typed) || price || 0 // a blank box means the price shown in it
   const s = summary(p, prices)
   const held = p.positions[symbol]?.qty ?? 0
   const isShort = side === 'sell' && qty > Math.max(held, 0)

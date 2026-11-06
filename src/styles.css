@@ -151,6 +151,7 @@ td a:hover b { color: var(--accent) } td b { font-weight: 600; transition: color
 .discover > .title, .discover > .pulse { grid-column: 1 / -1; margin: 0 }
 .pulse { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px } .pulse b { display: block; font-size: 24px; font-weight: 600 } .pulse small { font-size: 14px }
 .discover .stock-list { padding: 0; margin-top: 8px; min-height: 372px } .discover .stock-list > a { padding: 8px } .discover .note { margin-top: 12px }
+.discover .stock-list > a > span:first-child { flex: 1; min-width: 0 } .discover .stock-list > a > span:nth-child(2) { flex: none }
 .picks { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 8px }
 .pick { position: relative } .pick input { margin: 0 } .pick ul { position: absolute; z-index: 20; top: 100%; left: 0; right: 0; margin-top: 4px; padding: 4px; list-style: none; background: var(--surface); border-radius: 12px; box-shadow: 0 8px 24px rgb(10 58 128 / .2) }
 .pick li button { width: 100%; padding: 8px 10px; text-align: left; border-radius: 8px; font-size: 14px; font-weight: 600 } .pick li button:hover { background: var(--raised) }
