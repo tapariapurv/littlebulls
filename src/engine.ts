@@ -1,6 +1,7 @@
 // Pure paper trading rules, modelled on TradingView's paper engine: one netted position per
 // stock, buy or sell first, 2x borrowing, exits, and a margin call when the safety deposit runs out.
 export const MARGIN = 0.5
+export const MAX_TRADES = 3000
 export type Side = 'buy' | 'sell'
 export type Position = { qty: number; avg: number }
 export type Order = { id: string; sym: string; side: Side; qty: number; type: 'limit' | 'stop'; price: number; at: number; tp?: number; sl?: number; exit?: 'tp' | 'sl' }
@@ -11,7 +12,7 @@ export type Watchlist = { id: string; name: string; syms: string[] }
 export type Portfolio = {
   id: string; name: string; start: number; balance: number; realized: number; createdAt: number; exchange: string
   positions: Record<string, Position>; orders: Order[]; trades: Trade[]; done: DoneOrder[]
-  log: { at: number; text: string }[]; alerts: Alert[]; watchlists: Watchlist[]
+  log: { at: number; text: string }[]; alerts: Alert[]; watchlists: Watchlist[]; rev?: string
 }
 export type Candle = { t: number; o: number; h: number; l: number; c: number }
 export type Prices = Record<string, number>
@@ -71,7 +72,8 @@ export function fill(p: Portfolio, sym: string, side: Side, qty: number, price: 
   return note({
     ...p, positions, balance: p.balance + pnl, realized: p.realized + pnl,
     orders: closing && nq * pos.qty <= 0 ? p.orders.filter(o => !(o.exit && o.sym === sym)) : p.orders, // exits go away with their position
-    trades: [{ id: uid(), sym, side, qty, price, at, pnl, ...(forced ? { forced } : {}) }, ...p.trades],
+    // A saved portfolio can't pass 1 MB in the database, so only the latest trades are kept.
+    trades: [{ id: uid(), sym, side, qty, price, at, pnl, ...(forced ? { forced } : {}) }, ...p.trades].slice(0, MAX_TRADES),
   }, `${forced ? 'Bully closed' : side === 'buy' ? 'Bought' : 'Sold'} ${qty} ${short(sym)} at ${price.toFixed(2)}`, at)
 }
 
@@ -139,8 +141,8 @@ export const clearAlerts = (p: Portfolio, fired: Alert[]): Portfolio =>
 
 /** What the balance was after each finished trade, newest first. */
 export function balanceHistory(p: Portfolio) {
-  let balance = p.start
-  return [...p.trades].reverse().filter(t => t.pnl).map(t => ({ at: t.at, sym: t.sym, change: t.pnl, balance: balance += t.pnl })).reverse()
+  let balance = p.balance // counted back from now, so it stays right after the oldest trades are dropped
+  return p.trades.filter(t => t.pnl).map(t => { const row = { at: t.at, sym: t.sym, change: t.pnl, balance }; balance -= t.pnl; return row })
 }
 
 export function analytics(p: Portfolio) {

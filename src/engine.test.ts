@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { addOrder, canAfford, fill, newPortfolio, settle, summary, touched } from './engine.ts'
+import { MAX_TRADES, addOrder, canAfford, fill, newPortfolio, settle, summary, touched } from './engine.ts'
 
 let p = newPortfolio('t', 1000)
 assert(canAfford(p, {}, 'A', 'buy', 20, 100), '2x borrowing lets 1000 buy 2000 of stock')
@@ -64,3 +64,13 @@ assert.equal(cancelOrder(z, z.orders[0].id).done[0].status, 'cancelled')
 const al = addAlert(newPortfolio('a', 1), 'A', 110, 100)
 assert.equal(firedAlerts(al, { A: 105 }).length, 0); assert.equal(firedAlerts(al, { A: 110 }).length, 1)
 const r = resetPortfolio(z); assert.equal(r.balance, 10000); assert.equal(r.trades.length, 0); assert.equal(r.id, z.id)
+
+// Money history stays right after old trades are dropped, and the trade list can't outgrow a database document.
+{
+  let p = newPortfolio('cap', 100000)
+  for (let i = 0; i < MAX_TRADES + 10; i++) p = fill(p, 'A', i % 2 ? 'sell' : 'buy', 1, i % 2 ? 101 : 100)
+  assert.equal(p.trades.length, MAX_TRADES)
+  const h = balanceHistory(p)
+  assert.equal(h[0].balance, p.balance)
+  assert.equal(h[1].balance, p.balance - h[0].change)
+}
