@@ -3,13 +3,15 @@ import { createRoot } from 'react-dom/client'
 import { AnimatePresence, LayoutGroup, MotionConfig, motion } from 'motion/react'
 import {
   GoogleAuthProvider, createUserWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEmail,
-  signInWithEmailAndPassword, signInWithPopup, signOut, updateProfile, type User,
+  signInWithEmailAndPassword, signInWithPopup, updateProfile, type User,
 } from 'firebase/auth'
-import { POPULAR, api, auth, candles, mutate, nameOf, preload, savePortfolio, useQuotes, usePortfolios } from './data'
+import { api, auth, blip, candles, mutate, nameOf, notify, preload, remember, savePortfolio, screen, search, useQuotes, usePortfolios, useSettings, type Row } from './data'
 import { Discover } from './Discover'
-import { cancelOrder, fill, newPortfolio, settle, summary, type Portfolio } from './engine'
+import { cancelOrder, clearAlerts, firedAlerts, marketOrder, newPortfolio, settle, summary, type Portfolio } from './engine'
+import { EXCHANGES, exchange, short } from './markets'
+import { Analytics, History, Icon, SettingsPage, Watchlist } from './More'
 import { Stock } from './Stock'
-import { Bully, Modal, Num, Tabs, Term, Tick, Toaster, money, signedMoney, spring, tone, useToast } from './ui'
+import { Bully, Empty, Modal, Num, Tabs, Term, Tick, Toaster, money, setCurrency, signedMoney, spring, tone, useToast } from './ui'
 import './styles.css'
 
 const useHash = () => useSyncExternalStore(cb => {
@@ -76,9 +78,13 @@ function Login() {
 function NewPortfolio({ uid, onDone, onClose, first }: { uid: string; onDone: (id: string) => void; onClose?: () => void; first: boolean }) {
   const [name, setName] = useState(first ? 'My first portfolio' : '')
   const [amount, setAmount] = useState(100000)
+  const [ex, setEx] = useState('NSE')
+  const m = exchange(ex)
+  const big = { JPY: 10, KRW: 100, IDR: 1000 }[m.currency] ?? 1 // so the chips mean roughly the same in every currency
+  const fmt = new Intl.NumberFormat(m.locale, { style: 'currency', currency: m.currency, maximumFractionDigits: 0 })
   async function submit(e: FormEvent) {
     e.preventDefault()
-    const p = newPortfolio(name.trim(), amount)
+    const p = newPortfolio(name.trim(), amount, ex)
     await savePortfolio(uid, p)
     onDone(p.id)
   }
@@ -89,11 +95,19 @@ function NewPortfolio({ uid, onDone, onClose, first }: { uid: string; onDone: (i
       <p className="muted">A portfolio is your collection of trades. Try different ideas in different ones.</p>
       <form onSubmit={submit}>
         <label>Name it<input required maxLength={30} value={name} onChange={e => setName(e.target.value)} /></label>
-        <label>Pretend money to start with
-          <input required inputMode="numeric" value={amount ? amount.toLocaleString('en-IN') : ''} onChange={e => setAmount(Math.min(1e9, Number(e.target.value.replace(/\D/g, ''))))} />
+        <label>Stock exchange
+          <select value={ex} onChange={e => setEx(e.target.value)}>
+            {[...new Set(EXCHANGES.map(x => x.region))].map(r => <optgroup key={r} label={r}>
+              {EXCHANGES.filter(x => x.region === r).map(x => <option key={x.id} value={x.id}>{x.name} ({x.currency})</option>)}
+            </optgroup>)}
+          </select>
+          <small>This portfolio can only trade here, in {m.currency}. Make another portfolio to try a different exchange.</small>
         </label>
-        <div className="chips">{[10000, 100000, 1000000].map(a => (
-          <button type="button" key={a} className={amount === a ? 'on' : ''} onClick={() => setAmount(a)}>₹{a.toLocaleString('en-IN')}</button>
+        <label>Pretend money to start with
+          <input required inputMode="numeric" value={amount ? amount.toLocaleString(m.locale) : ''} onChange={e => setAmount(Math.min(1e9, Number(e.target.value.replace(/\D/g, ''))))} />
+        </label>
+        <div className="chips">{[10000, 100000, 1000000].map(x => x * big).map(a => (
+          <button type="button" key={a} className={amount === a ? 'on' : ''} onClick={() => setAmount(a)}>{fmt.format(a)}</button>
         ))}</div>
         <motion.button className="primary buy" disabled={!amount} whileTap={{ scale: 0.97 }}>Create portfolio</motion.button>
       </form>
@@ -103,11 +117,11 @@ function NewPortfolio({ uid, onDone, onClose, first }: { uid: string; onDone: (i
 
 function Home({ uid, p }: { uid: string; p: Portfolio }) {
   const toast = useToast()
-  const syms = [...Object.keys(p.positions), ...p.orders.map(o => o.sym), ...p.trades.slice(0, 20).map(t => t.sym)]
+  const syms = [...Object.keys(p.positions), ...p.orders.map(o => o.sym)]
   const q = useQuotes(syms)
   const prices = Object.fromEntries(Object.values(q.bySym).map(x => [x.symbol, x.price]))
   const s = summary(p, prices)
-  const [tab, setTab] = useState<'own' | 'wait' | 'done'>('own')
+  const [tab, setTab] = useState<'own' | 'wait'>('own')
   const gain = s.equity - p.start
   const parts = [['free', Math.max(s.available, 0)], ['dep', s.margin], ['hold', s.ordersMargin]] as const
   const total = parts.reduce((a, [, v]) => a + v, 0) || 1
@@ -116,8 +130,8 @@ function Home({ uid, p }: { uid: string; p: Portfolio }) {
   const close = (sym: string) => {
     const pos = p.positions[sym], px = prices[sym]
     if (!px) return
-    mutate(uid, p.id, c => c.positions[sym] ? fill(c, sym, pos.qty > 0 ? 'sell' : 'buy', Math.abs(c.positions[sym].qty), px) : null)
-      .then(() => toast({ title: `Closed ${nameOf(sym)}`, body: 'That win or loss is now locked in.' }))
+    mutate(uid, p.id, c => c.positions[sym] ? marketOrder(c, sym, pos.qty > 0 ? 'sell' : 'buy', Math.abs(c.positions[sym].qty), px) : null)
+      .then(() => blip()).then(() => toast({ title: `Closed ${nameOf(sym)}`, body: 'That win or loss is now locked in.' }))
   }
 
   return (
@@ -147,13 +161,13 @@ function Home({ uid, p }: { uid: string; p: Portfolio }) {
         <p className="muted small-note">You can trade up to twice your money. <Term k="marginCall">What if I lose too much?</Term></p>
       </section>
       <section className="card">
-        <Tabs id="home" value={tab} onChange={setTab} options={[['own', `What I have (${held.length})`], ['wait', `Waiting orders (${p.orders.length})`], ['done', `History (${p.trades.length})`]]} />
+        <Tabs id="home" value={tab} onChange={setTab} options={[['own', `What I have (${held.length})`], ['wait', `Waiting orders (${p.orders.length})`]]} />
         {tab === 'own' && (held.length ? (
           <div className="scroll"><table><thead><tr><th>Stock</th><th className="r">Shares</th><th className="r">My price</th><th className="r">Now</th><th className="r"><Term k="unrealized" end>Win or loss</Term></th><th /></tr></thead><tbody>
             <AnimatePresence initial={false}>{held.map(([sym, pos]) => {
               const px = prices[sym]; const pl = px ? (px - pos.avg) * pos.qty : null
               return <motion.tr key={sym} layout initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={spring}>
-                <td><a href={'#/stock/' + sym}><b>{nameOf(sym)}</b></a><small>{pos.qty < 0 ? 'Sold first, buy back later' : sym.replace('.NS', '')}</small></td>
+                <td><a href={'#/stock/' + sym}><b>{nameOf(sym)}</b></a><small>{pos.qty < 0 ? 'Sold first, buy back later' : short(sym)}</small></td>
                 <td className="r num">{Math.abs(pos.qty)}</td><td className="r num">{money(pos.avg)}</td>
                 <td className="r">{px ? <Tick value={px} /> : '—'}</td>
                 <td className={'r num ' + tone(pl ?? 0)}>{pl === null ? '—' : signedMoney(pl)}</td>
@@ -170,44 +184,38 @@ function Home({ uid, p }: { uid: string; p: Portfolio }) {
               <td className="r"><button className="ghost tiny" onClick={() => mutate(uid, p.id, c => cancelOrder(c, o.id))}>Cancel</button></td>
             </tr>)}</tbody></table></div>
         ) : <Empty text="No waiting orders. When the market is closed, you can set a price and let your order wait for it." />)}
-        {tab === 'done' && (p.trades.length ? (
-          <div className="scroll"><table><thead><tr><th>Stock</th><th>What happened</th><th className="r">Price</th><th className="r"><Term k="realized" end>Locked in</Term></th><th className="r">When</th></tr></thead><tbody>
-            {p.trades.slice(0, 50).map(t => <tr key={t.id}>
-              <td><a href={'#/stock/' + t.sym}><b>{nameOf(t.sym)}</b></a></td>
-              <td>{t.forced ? 'Bully closed ' : t.side === 'buy' ? 'Bought ' : 'Sold '}{t.qty}{t.forced && <small>Losses ate half the deposit</small>}</td>
-              <td className="r num">{money(t.price)}</td>
-              <td className={'r num ' + tone(t.pnl)}>{t.pnl ? signedMoney(t.pnl) : '—'}</td>
-              <td className="r muted">{new Date(t.at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}</td>
-            </tr>)}</tbody></table></div>
-        ) : <Empty text="Your finished trades will show up here." />)}
       </section>
     </div>
   )
 }
 
-const Empty = ({ text }: { text: string }) => <div className="empty"><Bully size={48} mood="hmm" /><p>{text}</p></div>
-
-function Stocks() {
+function Stocks({ ex }: { ex: string }) {
   const [text, setText] = useState('')
-  const [found, setFound] = useState<{ symbol: string; name: string }[] | null>(null)
-  const q = useQuotes(POPULAR.map(p => p[0]))
+  const [found, setFound] = useState<Row[] | null>(null)
+  const [giants, setGiants] = useState<Row[]>([])
+  useEffect(() => { screen('giants', ex, 15).then(setGiants).catch(() => {}) }, [ex])
   useEffect(() => {
     if (text.trim().length < 2) { setFound(null); return }
-    const t = setTimeout(() => api<{ symbol: string; name: string }[]>('search?q=' + encodeURIComponent(text)).then(setFound).catch(() => setFound([])), 300)
+    const t = setTimeout(() => search(text, ex).then(r => {
+      r.forEach(x => remember(x.symbol, x.name))
+      if (r[0]) preload(r[0].symbol) // the likely pick is ready before it's tapped
+      setFound(r)
+    }).catch(() => setFound([])), 200)
     return () => clearTimeout(t)
-  }, [text])
-  const rows = found ?? POPULAR.map(([symbol, name]) => ({ symbol, name }))
+  }, [text, ex])
+  const rows = found ?? giants
+  const q = useQuotes(rows.slice(0, 20).map(r => r.symbol))
   return (
     <div className="stocks">
-      <header className="title"><div><h1>Stocks</h1><p className="muted">Companies on India’s biggest stock exchange, the NSE.</p></div></header>
-      <input className="search" autoFocus type="search" aria-label="Search for a stock" placeholder="Search a company, like Tata or Nestle" value={text} onChange={e => setText(e.target.value)} />
+      <header className="title"><div><h1>Stocks</h1><p className="muted">Companies on {exchange(ex).name}.</p></div></header>
+      <input className="search" autoFocus type="search" aria-label="Search for a stock" placeholder="Search a company or ticker" value={text} onChange={e => setText(e.target.value)} />
       <section className="card stock-list">
-        {rows.length === 0 && <Empty text={`Bully couldn’t find “${text}” on the NSE. Try another name.`} />}
+        {found?.length === 0 && <Empty text={`Bully couldn’t find “${text}” on ${exchange(ex).name}. Try another name.`} />}
         {rows.map(r => {
           const x = q.bySym[r.symbol]; const pct = x ? (x.price - x.prev) / x.prev * 100 : 0
           return <a key={r.symbol} href={'#/stock/' + r.symbol} onPointerEnter={() => preload(r.symbol)}>
             <span className="mono-mark" style={{ background: `hsl(${[...r.symbol].reduce((a, c) => a + c.charCodeAt(0) * 7, 0) % 360} 70% 92%)`, color: `hsl(${[...r.symbol].reduce((a, c) => a + c.charCodeAt(0) * 7, 0) % 360} 70% 25%)` }}>{r.name[0]}</span>
-            <span><b>{r.name}</b><small>{r.symbol.replace('.NS', '')}</small></span>
+            <span><b>{r.name}</b><small>{short(r.symbol)}</small></span>
             {x && <span className="r"><Tick value={x.price} /><small className={'num ' + tone(pct)}>{pct >= 0 ? '+' : ''}{pct.toFixed(2)}%</small></span>}
           </a>
         })}
@@ -219,33 +227,44 @@ function Stocks() {
 /** Fills waiting orders and checks for margin calls, even for trades placed days ago. */
 function useSettler(uid: string, p: Portfolio | undefined) {
   const toast = useToast()
-  const key = p ? p.id + p.orders.length + Object.keys(p.positions).length : ''
+  const key = p ? p.id + p.orders.length + Object.keys(p.positions).length + p.alerts.length : ''
   useEffect(() => {
-    if (!p || (!p.orders.length && !Object.keys(p.positions).length)) return
+    if (!p || (!p.orders.length && !p.alerts.length && !Object.keys(p.positions).length)) return
     const run = async () => {
       const orderSyms = [...new Set(p.orders.map(o => o.sym))]
-      const syms = [...new Set([...orderSyms, ...Object.keys(p.positions)])]
+      const syms = [...new Set([...orderSyms, ...Object.keys(p.positions), ...p.alerts.map(a => a.sym)])]
       const [hist, quotes] = await Promise.all([
         Promise.all(orderSyms.map(s => candles(s, 'orders'))),
         api<{ quotes: { symbol: string; price: number }[] }>('quote?symbols=' + encodeURIComponent(syms.join(','))),
       ])
       const byS = Object.fromEntries(orderSyms.map((s, i) => [s, hist[i]]))
       const prices = Object.fromEntries(quotes.quotes.map(x => [x.symbol, x.price]))
-      let before = 0, after = 0, forced = false
+      let before = 0, after = 0, forced = false, fired: Portfolio['alerts'] = []
       await mutate(uid, p.id, c => {
         const next = settle(c, byS, prices)
         before = c.trades.length; after = next?.trades.length ?? before; forced = !!next?.trades[0]?.forced
-        return next
+        fired = firedAlerts(next ?? c, prices)
+        return fired.length ? clearAlerts(next ?? c, fired) : next
       })
+      for (const a of fired) {
+        const body = `${nameOf(a.sym)} reached ${money(a.price)}.`
+        toast({ title: 'Your alert went off', body, mood: 'wow' })
+        blip()
+        notify('LittleBulls alert', body)
+      }
+      if (after > before) notify('LittleBulls', forced ? 'Bully closed your trades to protect your money.' : 'A waiting order happened.')
+      if (after > before) blip()
       if (forced) toast({ title: 'Bully closed your trades', body: 'Losses ate half your deposit, so your trades were closed to protect your money.', mood: 'hmm' })
       else if (after > before) toast({ title: 'A waiting order happened', body: 'The market reached your price. Check your portfolio.', mood: 'wow' })
     }
     run().catch(() => {})
-    const t = setInterval(() => run().catch(() => {}), 60000)
+    const t = setInterval(() => run().catch(() => {}), 30000)
     return () => clearInterval(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [uid, key])
 }
+
+const NAV = [['home', 'My money'], ['stocks', 'Stocks'], ['watchlist', 'Watchlist'], ['discover', 'Discover'], ['analytics', 'Analytics'], ['history', 'History'], ['settings', 'Settings']]
 
 function Shell({ user }: { user: User }) {
   const hash = useHash()
@@ -256,7 +275,9 @@ function Shell({ user }: { user: User }) {
   const pick = (id: string) => { setPid(id); setAdding(false); try { localStorage.setItem('pid', id) } catch { /* private window */ } }
   useSettler(user.uid, p)
   const stockSym = hash.startsWith('#/stock/') ? decodeURIComponent(hash.slice(8)) : ''
-  const route = stockSym ? 'stock' : hash === '#/stocks' ? 'stocks' : hash === '#/discover' ? 'discover' : 'home'
+  const route = stockSym ? 'stock' : hash.slice(2) || 'home'
+  const m = p ? exchange(p.exchange) : null
+  if (m) setCurrency(m.currency, m.locale)
 
   return (
     <div className="shell">
@@ -264,25 +285,30 @@ function Shell({ user }: { user: User }) {
         <a className="brand" href="#/"><Bully size={36} /><span>LittleBulls</span></a>
         <label className="switch">Portfolio
           <select value={p?.id ?? ''} onChange={e => e.target.value === '+' ? setAdding(true) : pick(e.target.value)}>
-            {list?.map(x => <option key={x.id} value={x.id}>{x.name}</option>)}
+            {list?.map(x => <option key={x.id} value={x.id}>{x.name} · {x.exchange}</option>)}
             <option value="+">+ New portfolio</option>
           </select>
         </label>
         <LayoutGroup>
-          {[['#/', 'My money', route === 'home'], ['#/stocks', 'Stocks', route === 'stocks' || route === 'stock'], ['#/discover', 'Discover', route === 'discover']].map(([h, label, on]) => (
-            <a key={h as string} href={h as string} className={'nav' + (on ? ' on' : '')} aria-current={on ? 'page' : undefined}>
-              {on && <motion.i layoutId="nav" transition={spring} />}<span>{label}</span>
+          <div className="nav-links">{NAV.map(([id, label]) => {
+            const on = route === id || (id === 'stocks' && route === 'stock')
+            return <a key={id} href={id === 'home' ? '#/' : '#/' + id} className={'nav' + (on ? ' on' : '')} aria-current={on ? 'page' : undefined}>
+              {on && <motion.i layoutId="nav" transition={spring} />}<Icon name={id} /><span>{label}</span>
             </a>
-          ))}
+          })}</div>
         </LayoutGroup>
-        <div className="me"><span>{user.displayName || 'Trader'}</span><button className="link" onClick={() => signOut(auth)}>Log out</button></div>
+        <div className="me"><span>{user.displayName || 'Trader'}</span></div>
       </nav>
       <main className="canvas">
         {list === null ? <div className="boot"><Bully size={72} /><p className="muted">Opening your piggy bank…</p></div> : p && (
           <>
             {route === 'home' && <Home uid={user.uid} p={p} />}
-            {route === 'stocks' && <Stocks />}
-            {route === 'discover' && <Discover />}
+            {route === 'stocks' && <Stocks key={p.exchange} ex={p.exchange} />}
+            {route === 'watchlist' && <Watchlist uid={user.uid} p={p} />}
+            {route === 'discover' && <Discover key={p.exchange} ex={p.exchange} />}
+            {route === 'analytics' && <Analytics p={p} />}
+            {route === 'history' && <History p={p} />}
+            {route === 'settings' && <SettingsPage user={user} p={p} />}
             {route === 'stock' && <Stock key={stockSym + p.id} uid={user.uid} p={p} symbol={stockSym} />}
           </>
         )}
@@ -304,6 +330,11 @@ function App() {
   return user ? <Shell key={user.uid} user={user} /> : <Login />
 }
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode><MotionConfig reducedMotion="user"><Toaster><App /></Toaster></MotionConfig></StrictMode>,
-)
+function Root() {
+  const { calm } = useSettings()
+  return <MotionConfig reducedMotion={calm ? 'always' : 'user'}><Toaster><App /></Toaster></MotionConfig>
+}
+
+if (import.meta.env.PROD) navigator.serviceWorker?.register('/sw.js').catch(() => {})
+
+createRoot(document.getElementById('root')!).render(<StrictMode><Root /></StrictMode>)

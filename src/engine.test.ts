@@ -36,3 +36,31 @@ assert.equal(settle(m, {}, { A: 90 }), null, 'a dip alone is no margin call')
 m = settle(m, {}, { A: 55 })! // equity -900+1000=100 < deposit 550*.5
 assert.equal(m.positions.A, undefined); assert.equal(m.trades[0].forced, true); assert.equal(m.balance, 100)
 console.log('engine ok')
+
+// Exits: the take-win fires, its stop-loss partner goes away, and the win is counted.
+const { addAlert, analytics, balanceHistory, cancelOrder, firedAlerts, marketOrder, resetPortfolio } = await import('./engine.ts')
+let x = marketOrder(newPortfolio('x', 10000), 'A', 'buy', 10, 100, { tp: 110, sl: 90 })
+assert.equal(x.orders.length, 2); assert.equal(x.done[0].type, 'market')
+assert.equal(summary(x, { A: 100 }).ordersMargin, 0, 'exits need no deposit')
+const later = (x.orders[0].at + 60000) / 1000
+x = settle(x, { A: [{ t: later, o: 100, h: 111, l: 99, c: 110 }] }, { A: 110 })!
+assert.equal(x.positions.A, undefined); assert.equal(x.orders.length, 0); assert.equal(x.realized, 100)
+assert.equal(x.done[0].exit, 'tp'); assert.equal(balanceHistory(x)[0].balance, 10100)
+// When a stop and a win are both touched, the earlier candle decides.
+let y = marketOrder(newPortfolio('y', 10000), 'A', 'buy', 10, 100, { tp: 110, sl: 90 })
+const t0 = (y.orders[0].at + 60000) / 1000
+y = settle(y, { A: [{ t: t0, o: 100, h: 100, l: 89, c: 90 }, { t: t0 + 300, o: 90, h: 112, l: 90, c: 111 }] }, { A: 111 })!
+assert.equal(y.realized, -100); assert.equal(y.orders.length, 0)
+assert.deepEqual([analytics(y).losses, analytics(y).worst], [1, -100])
+// Closing by hand removes exits; a waiting entry brings its exits along when it fills.
+let z = marketOrder(newPortfolio('z', 10000), 'A', 'buy', 5, 100, { sl: 90 })
+z = marketOrder(z, 'A', 'sell', 5, 105); assert.equal(z.orders.length, 0)
+z = addOrder(z, { sym: 'B', side: 'buy', qty: 2, type: 'limit', price: 50, tp: 60 })
+const t1 = (z.orders[0].at + 60000) / 1000
+z = settle(z, { B: [{ t: t1, o: 55, h: 55, l: 49, c: 50 }] }, { B: 50 })!
+assert.equal(z.positions.B.qty, 2); assert.equal(z.orders[0].exit, 'tp')
+assert.equal(cancelOrder(z, z.orders[0].id).done[0].status, 'cancelled')
+// Alerts fire when crossed in the direction they were set for.
+const al = addAlert(newPortfolio('a', 1), 'A', 110, 100)
+assert.equal(firedAlerts(al, { A: 105 }).length, 0); assert.equal(firedAlerts(al, { A: 110 }).length, 1)
+const r = resetPortfolio(z); assert.equal(r.balance, 10000); assert.equal(r.trades.length, 0); assert.equal(r.id, z.id)

@@ -1,7 +1,10 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react'
 import { AnimatePresence, animate, motion, useMotionValue, useTransform } from 'motion/react'
 
-export const money = (n: number) => '₹' + n.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+let format = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' })
+/** Every amount shows in the open portfolio's currency. */
+export const setCurrency = (currency: string, locale: string) => { if (format.resolvedOptions().currency !== currency) format = new Intl.NumberFormat(locale, { style: 'currency', currency }) }
+export const money = (n: number) => format.format(n)
 export const signedMoney = (n: number) => (n > 0 ? '+' : n < 0 ? '-' : '') + money(Math.abs(n))
 export const tone = (n: number) => (n > 0 ? 'pos' : n < 0 ? 'neg' : '')
 
@@ -47,16 +50,23 @@ export const TERMS: Record<string, [string, string]> = {
   unrealized: ['Unrealized P&L', 'Wins and losses on trades still open. They change with the price and only count once you close.'],
   margin: ['Account margin', 'To keep a trade open, you set aside half its value as a deposit. You get it back when you close.'],
   ordersMargin: ['Orders margin', 'Money set aside for orders still waiting for their price, so it is there if they happen.'],
-  available: ['Available funds', 'The money you can use for a new trade. Because the deposit is half, ₹100 here can open a ₹200 trade.'],
+  available: ['Available funds', 'The money you can use for a new trade. Because the deposit is half, 100 here can open a 200 trade.'],
   borrow: ['Leverage', 'You can trade up to twice your money. Wins grow twice as fast, and so do losses.'],
   marginCall: ['Margin call', 'If losses eat half your deposit, Bully closes all your trades so you cannot lose more than you have.'],
   market: ['Market order', 'Buy or sell straight away at today’s price. Only works while the market is open.'],
   limit: ['Limit order', 'Name your price. Buy when it falls to your price, or sell when it rises to it.'],
   stop: ['Stop order', 'Wait for a move. Buy if the price climbs to your number, or sell if it drops to it, often to stop a loss.'],
   short: ['Short selling', 'Selling a share you don’t own and buying it back later. You win if the price falls and lose if it rises.'],
+  tp: ['Take profit', 'A plan to sell automatically once you have won enough, so the win is locked in even if you are away.'],
+  sl: ['Stop loss', 'A plan to get out automatically if the price goes the wrong way, so a small loss can’t turn into a big one.'],
+  winRate: ['Win rate', 'Out of your finished trades, how many made money. A low number can still be fine if your wins are bigger than your losses.'],
+  profitFactor: ['Profit factor', 'Your total wins divided by your total losses. Above 1 means you have won more than you lost.'],
+  expectancy: ['Expectancy', 'What an average finished trade has made or lost for you.'],
+  drawdown: ['Max drawdown', 'The biggest fall from a high point, on your way through your trades. It shows the toughest stretch.'],
+  runup: ['Max run-up', 'The biggest climb from a low point, on your way through your trades. It shows your best stretch.'],
   candle: ['Candlestick', 'Each candle is one slice of time. Green means the price rose, red means it fell, and the thin lines show its highest and lowest.'],
   'Mkt. cap': ['Market cap', 'How much the whole company is worth if you bought every share.'],
-  'P/E ratio': ['P/E ratio', 'How many rupees people pay for each rupee of yearly profit. A higher number means people expect more growth.'],
+  'P/E ratio': ['P/E ratio', 'How much people pay for each 1 of yearly profit. A higher number means people expect more growth.'],
   Dividend: ['Dividend yield', 'The share of the price a company pays owners each year as a thank-you.'],
   '52-wk high': ['52-week high', 'The highest price in the last year.'],
   '52-wk low': ['52-week low', 'The lowest price in the last year.'],
@@ -84,6 +94,8 @@ export function Term({ k, children, end }: { k: string; children: ReactNode; end
     </span>
   )
 }
+
+export const Empty = ({ text }: { text: string }) => <div className="empty"><Bully size={48} mood="hmm" /><p>{text}</p></div>
 
 export function Tabs<T extends string>({ id, value, onChange, options }: { id: string; value: T; onChange: (v: T) => void; options: [T, ReactNode][] }) {
   return (

@@ -164,3 +164,29 @@ td a:hover b { color: var(--accent) } td b { font-weight: 600; transition: color
 .compare th, .compare td { white-space: normal } .compare td:first-child { color: var(--muted) } .win { font-weight: 700 }
 @media (max-width: 1080px) { .discover { grid-template-columns: minmax(0, 1fr) } .discover .stock-list { min-height: 0 } }
 @media (max-width: 760px) { .brand span { display: none } .pulse { grid-template-columns: minmax(0, 1fr) } .pulse > div { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap } .pulse b { font-size: 18px } }
+
+/* Navigation with icons; on phones it becomes a bottom bar like a native app */
+.nav-links { display: flex; flex-direction: column; gap: 4px }
+.nav { display: flex; align-items: center; gap: 10px } .nav svg { position: relative; flex: none }
+label.check { display: flex; flex-direction: row; align-items: center; gap: 8px; font-size: 14px; font-weight: 600 } label.check input { width: 18px; height: 18px; accent-color: var(--accent) }
+label small { font-weight: 500 }
+.chart-trade { position: absolute; top: 8px; left: 8px; z-index: 5; display: flex; gap: 6px }
+.chart-trade button { height: 32px; padding: 0 12px; border-radius: 99px; color: #fff; font-weight: 700; font-size: 13px; transition: transform 100ms } .chart-trade button:active { transform: scale(.97) }
+.chart-trade .buy { background: #2f7a45 } .chart-trade .sell { background: #c41c29 }
+.title-actions { display: flex; gap: 8px; flex: none } .ghost.on { border-color: var(--accent); color: var(--accent-ink) } .ghost.danger { color: var(--negative) }
+.plain { list-style: none; padding: 0; margin: 8px 0 0 } .plain li { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 2px; border-top: 1px solid var(--raised) } .plain li:first-child { border-top: 0 } .plain small { flex: none }
+.list-bar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: var(--gap) } .list-bar .tabs { flex: 1 1 200px; min-width: 0 }
+.inline-form { display: flex; gap: 8px; align-items: center; margin-bottom: 10px } .inline-form input { flex: 1; min-width: 0 } .inline-form button { flex: none; white-space: nowrap; width: auto }
+.row-btn { display: flex; width: 100%; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 12px; text-align: left } .row-btn:hover { background: var(--raised) }
+.watch-row { display: flex; align-items: center; gap: 8px; padding-right: 6px } .watch-row a { flex: 1; min-width: 0; display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 10px 14px; border-radius: 12px } .watch-row a:hover { background: var(--raised) } .watch-row a > span:first-child { min-width: 0 } .watch-row b { font-weight: 600 }
+.curve { height: 260px } h2 b { float: right }
+.stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--gap); margin: var(--gap) 0 } .stats b { display: block; font-size: 22px; margin-top: 4px }
+.stocks > .card + .card { margin-top: var(--gap) }
+.toggle { display: flex; flex-direction: row; justify-content: space-between; align-items: center; gap: 16px; padding: 10px 0; font-weight: 500; color: var(--text); font-size: 15px } .toggle input[type=checkbox] { width: 20px; height: 20px; flex: none; accent-color: var(--accent) } .toggle button { flex: none }
+.tiny-input { width: 72px; flex: none; text-align: right } .button-row { display: flex; gap: 8px; flex-wrap: wrap }
+@media (max-width: 760px) {
+  .nav-links { position: fixed; z-index: 20; left: 0; right: 0; bottom: 0; flex-direction: row; gap: 0; background: var(--surface); border-top: 1px solid var(--raised); padding: 4px 2px calc(4px + env(safe-area-inset-bottom)) }
+  .nav { flex: 1 1 0; min-width: 0; flex-direction: column; gap: 2px; padding: 5px 0; font-size: 10.5px; text-align: center } .nav i { inset: 1px 2px }
+  .canvas { padding-bottom: calc(84px + env(safe-area-inset-bottom)) } .stats { grid-template-columns: repeat(2, minmax(0, 1fr)) } .title { flex-wrap: wrap }
+}
+form select { display: block; width: 100%; height: 44px; margin-top: 4px; padding: 0 10px; background: var(--surface); border: 1px solid var(--control); border-radius: var(--r-control); font-weight: 600 }
