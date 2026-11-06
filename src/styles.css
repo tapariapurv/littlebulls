@@ -141,3 +141,5 @@ td a:hover b { color: var(--accent) } td b { font-weight: 600; transition: color
   .strip { grid-template-columns: repeat(2, 1fr) } .pop { width: 220px } .chart-box { height: 300px }
 }
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { transition-duration: .01ms !important; scroll-behavior: auto !important } .tick.up, .tick.down { animation-duration: 300ms } }
+.home, .stock-main, .stock-side { grid-template-columns: minmax(0, 1fr) }
+@media (max-width: 760px) { .brand { font-size: 18px } .nav { padding: 6px 10px; font-size: 15px } .me .link { font-size: 13px } .side { gap: 2px } .switch { margin-top: 6px } }

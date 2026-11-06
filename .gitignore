@@ -6,3 +6,4 @@ __pycache__
 .taste-skill
 firebase-debug.log
 .firebase
+.DS_Store
