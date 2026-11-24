@@ -163,7 +163,7 @@ td a:hover b { color: var(--accent) } td b { font-weight: 600; transition: color
 .pick li button { width: 100%; padding: 8px 10px; text-align: left; border-radius: 8px; font-size: 14px; font-weight: 600 } .pick li button:hover { background: var(--raised) }
 .compare th, .compare td { white-space: normal } .compare td:first-child { color: var(--muted) } .win { font-weight: 700 }
 @media (max-width: 1080px) { .discover { grid-template-columns: minmax(0, 1fr) } .discover .stock-list { min-height: 0 } }
-@media (max-width: 760px) { .brand span { display: none } .pulse { grid-template-columns: minmax(0, 1fr) } .pulse > div { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap } .pulse b { font-size: 18px } }
+@media (max-width: 760px) { .brand span { display: none } .pulse { grid-template-columns: minmax(0, 1fr) } .pulse > a { display: flex; justify-content: space-between; align-items: baseline; flex-wrap: wrap } .pulse b { font-size: 18px } }
 
 /* Navigation with icons; on phones it becomes a bottom bar like a native app */
 .nav-links { display: flex; flex-direction: column; gap: 4px }
@@ -190,3 +190,54 @@ label small { font-weight: 500 }
   .canvas { padding-bottom: calc(84px + env(safe-area-inset-bottom)) } .stats { grid-template-columns: repeat(2, minmax(0, 1fr)) } .title { flex-wrap: wrap }
 }
 form select { display: block; width: 100%; height: 44px; margin-top: 4px; padding: 0 10px; background: var(--surface); border: 1px solid var(--control); border-radius: var(--r-control); font-weight: 600 }
+
+/* Markets */
+.kind { font-style: normal; font-size: 11px; font-weight: 700; letter-spacing: .02em; background: var(--raised); color: var(--accent-ink); padding: 1px 7px; border-radius: 99px; margin-left: 4px; vertical-align: 1px }
+.list-note { font-size: 14px; padding: 8px 14px 4px } .stock-list > .tabs { padding: 4px 6px 0 } .pad { padding: 14px }
+.login-art .back { align-self: flex-start; margin-bottom: auto } .login-art { justify-content: flex-start } .login-art > div { margin-top: auto }
+
+/* Landing */
+.land { background: var(--surface); min-height: 100dvh }
+.land-bar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 24px; padding: 14px clamp(16px, 4vw, 48px); background: rgb(255 255 255 / .88); backdrop-filter: blur(12px); border-bottom: 1px solid var(--rule) }
+.land-bar .brand { padding: 0 } .land-bar nav { display: flex; gap: 20px; margin-right: auto; font-size: 15px; font-weight: 600; color: var(--muted) } .land-bar nav a:hover { color: var(--text) }
+.land-actions { display: flex; align-items: center; gap: 16px }
+.land-hero { display: grid; grid-template-columns: 1.3fr 1fr; gap: 48px; align-items: center; padding: clamp(48px, 8vw, 104px) clamp(16px, 6vw, 96px); background: var(--accent-soft); color: var(--accent-ink) }
+.land-hero h1 { font-size: clamp(44px, 6.4vw, 88px); margin: 8px 0 18px }
+.eyebrow { font-weight: 700; font-size: 14px; letter-spacing: .06em; text-transform: uppercase }
+.lead { font-size: 19px; max-width: 58ch; color: var(--muted) } .land-hero .lead { color: var(--accent-ink) }
+.land-cta { display: flex; gap: 12px; margin-top: 28px; flex-wrap: wrap } .land-cta > * { width: auto; padding: 0 28px; height: 52px; display: inline-flex; align-items: center }
+.hero-card { background: var(--surface); border-radius: 28px; padding: 32px; display: grid; justify-items: center; gap: 20px; box-shadow: 0 24px 64px rgb(10 58 128 / .14) }
+.hero-card dl { width: 100%; display: grid; gap: 4px } .hero-card div { display: flex; justify-content: space-between; padding: 10px 0; border-top: 1px solid var(--rule) }
+.hero-card dt { color: var(--muted) } .hero-card dd { margin: 0; font: 600 24px Fredoka, sans-serif; color: var(--text) }
+.land-block { padding: 80px clamp(16px, 6vw, 96px) 0; max-width: 1240px; margin: 0 auto; scroll-margin-top: 64px }
+.land-block > h2 { font-size: clamp(28px, 3.4vw, 40px); color: var(--accent-ink); margin-bottom: 8px } .land-block > .lead { margin-bottom: 28px }
+.land-block > h2 + :not(.lead) { margin-top: 24px }
+.land-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px } .land-grid.five { grid-template-columns: repeat(5, 1fr) }
+.land .card { background: var(--raised) } .land h3 { font: 700 18px/1.3 Manrope, sans-serif; margin-bottom: 6px } .land .card p { color: var(--muted) }
+.land-steps { list-style: none; padding: 0; display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; counter-reset: s }
+.land-steps li { counter-increment: s; background: var(--raised); border-radius: var(--r-card); padding: var(--pad); color: var(--muted) }
+.land-steps li::before { content: counter(s); display: grid; place-items: center; width: 36px; height: 36px; border-radius: 50%; background: var(--accent); color: #fff; font: 600 18px Fredoka, sans-serif; margin-bottom: 12px }
+.land-steps b { color: var(--text) }
+.land-two { display: grid; grid-template-columns: 1fr 1fr; gap: 16px }
+.ticks, .dashes { list-style: none; padding: 0; display: grid; gap: 10px; margin-top: 8px } .ticks li, .dashes li { padding-left: 26px; position: relative; color: var(--muted) }
+.ticks li::before { content: '✓'; position: absolute; left: 0; color: var(--positive); font-weight: 700 } .dashes li::before { content: '!'; position: absolute; left: 6px; color: var(--amber); font-weight: 800 }
+.land-faq { display: grid; gap: 10px; max-width: 820px }
+.land-faq details { background: var(--raised); border-radius: 14px; padding: 16px 20px } .land-faq summary { font-weight: 700; cursor: pointer } .land-faq p { margin-top: 8px; color: var(--muted) }
+.land-end { margin: 96px clamp(16px, 6vw, 96px) 0; padding: 56px 24px; border-radius: 28px; background: var(--accent-soft); color: var(--accent-ink); display: grid; justify-items: center; gap: 10px; text-align: center }
+.land-end h2 { font-size: 34px; margin: 0 }
+.land-foot { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; padding: 32px clamp(16px, 6vw, 96px); font-size: 14px; color: var(--muted) }
+@media (max-width: 1080px) { .land-grid.five { grid-template-columns: repeat(3, 1fr) } .land-bar nav { display: none } }
+@media (max-width: 760px) {
+  .land-hero, .land-two, .land-steps, .land-grid, .land-grid.five { grid-template-columns: minmax(0, 1fr) }
+  .land-block { padding-top: 56px } .land-bar .brand span { display: inline } .land-actions .link { display: none }
+}
+
+/* Tour */
+.tour-top { display: flex; justify-content: space-between; align-items: center; min-height: 24px }
+.dots { display: flex; gap: 6px } .dots i { width: 8px; height: 8px; border-radius: 99px; background: var(--control); transition: width 200ms var(--ease-out), background 200ms }
+.dots i.on { width: 22px; background: var(--accent) }
+.tour-step { display: grid; gap: 10px; min-height: 260px; align-content: start; padding-top: 8px } .tour-step h2 { margin: 0 }
+.tour-body { display: grid; gap: 10px; color: var(--muted) } .tour-body b { color: var(--text) }
+.tour-list { padding-left: 18px; display: grid; gap: 8px }
+.tour-nav { display: flex; gap: 10px; align-items: center; justify-content: flex-end; margin-top: 8px } .tour-nav .ghost.tiny { margin-right: auto; height: 42px }
+.modal > .link { justify-self: center }

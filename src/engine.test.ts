@@ -74,3 +74,27 @@ const r = resetPortfolio(z); assert.equal(r.balance, 10000); assert.equal(r.trad
   assert.equal(h[0].balance, p.balance)
   assert.equal(h[1].balance, p.balance - h[0].change)
 }
+
+// A limit fills at a better price when the market opens past it, never a worse one.
+{
+  const { fillPrice, marketable, round8 } = await import('./engine.ts')
+  const cd = { t: 1, o: 90, h: 99, l: 88, c: 95 }
+  assert.equal(fillPrice({ side: 'buy', type: 'limit', price: 95 }, cd), 90, 'opened below the buy limit, so it got the cheaper open')
+  assert.equal(fillPrice({ side: 'buy', type: 'limit', price: 89 }, cd), 89)
+  assert.equal(fillPrice({ side: 'sell', type: 'limit', price: 85 }, cd), 90, 'opened above the sell limit')
+  assert.equal(fillPrice({ side: 'sell', type: 'stop', price: 89 }, cd), 89)
+  assert(marketable('buy', 'limit', 105, 100), 'buy limit above the price happens now')
+  assert(!marketable('buy', 'limit', 95, 100), 'buy limit below the price waits')
+  assert(marketable('sell', 'limit', 95, 100) && !marketable('sell', 'limit', 105, 100))
+  assert(marketable('buy', 'stop', 95, 100) && !marketable('buy', 'stop', 105, 100))
+  assert(marketable('sell', 'stop', 105, 100) && !marketable('sell', 'stop', 95, 100))
+  let g = addOrder(newPortfolio('t', 1000), { sym: 'A', side: 'buy', qty: 1, type: 'limit', price: 95 })
+  g = settle(g, { A: [{ t: Date.now() / 1000 + 9, o: 90, h: 92, l: 89, c: 91 }] }, { A: 91 })!
+  assert.equal(g.positions.A.avg, 90); assert.equal(g.done[0].price, 90)
+  // Parts of a coin add up to exactly nothing when sold.
+  let f = fill(fill(newPortfolio('t', 1000), 'B', 'buy', 0.1, 10), 'B', 'buy', 0.2, 10)
+  assert(canAfford(f, {}, 'B', 'buy', 0.5, 10))
+  f = fill(f, 'B', 'sell', 0.3, 10)
+  assert.equal(f.positions.B, undefined); assert.equal(round8(0.1 + 0.2), 0.3)
+  console.log('fills ok')
+}

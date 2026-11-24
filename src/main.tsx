@@ -5,9 +5,11 @@ import {
   GoogleAuthProvider, createUserWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEmail,
   signInWithEmailAndPassword, signInWithPopup, updateProfile, type User,
 } from 'firebase/auth'
-import { api, auth, blip, candles, mutate, nameOf, notify, preload, savePortfolio, screen, useQuotes, usePortfolios, useSearch, useSettings, type Row } from './data'
+import { api, auth, blip, candles, mutate, nameOf, notify, savePortfolio, useQuotes, usePortfolios, useSettings } from './data'
 import { cancelOrder, clearAlerts, firedAlerts, marketOrder, newPortfolio, settle, summary, type Portfolio } from './engine'
-import { EXCHANGES, exchange, short } from './markets'
+import { EXCHANGES, exchange, short, units } from './markets'
+import { Markets } from './Browse'
+import { Landing, Tour } from './Intro'
 import { Analytics, History, Icon, SettingsPage, Watchlist } from './More'
 import { Bully, Empty, Modal, Num, Tabs, Term, Tick, Toaster, money, setCurrency, signedMoney, spring, tone, useToast } from './ui'
 import './styles.css'
@@ -32,8 +34,8 @@ const FRIENDLY: Record<string, string> = {
   'auth/popup-closed-by-user': 'The Google window was closed. Try again when you’re ready.',
 }
 
-function Login() {
-  const [mode, setMode] = useState<'in' | 'up'>('up')
+function Login({ start }: { start: 'in' | 'up' }) {
+  const [mode, setMode] = useState(start)
   const [nick, setNick] = useState('')
   const [email, setEmail] = useState('')
   const [pass, setPass] = useState('')
@@ -54,6 +56,7 @@ function Login() {
   return (
     <main className="login">
       <section className="login-art">
+        <a className="link back" href="#/">← About LittleBulls</a>
         <motion.div initial={{ scale: 0.9, rotate: -4 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: 'spring', bounce: 0.5, duration: 0.7 }}><Bully size={168} /></motion.div>
         <h1>LittleBulls<small>Paper trading for kids</small></h1>
         <p>Learn the stock market with real prices and pretend money. Nobody can lose real money here.</p>
@@ -149,7 +152,7 @@ function Home({ uid, p }: { uid: string; p: Portfolio }) {
         <div><h1>{p.name}</h1>
           <p className="muted">{gain === 0 ? `You started with ${money(p.start)}.` : <>You’re <b className={tone(gain)}>{gain > 0 ? 'up' : 'down'} {money(Math.abs(gain))}</b> since you started with {money(p.start)}.</>}</p>
         </div>
-        <a className="primary buy small" href="#/stocks">Find a stock</a>
+        <a className="primary buy small" href="#/stocks">Find something to trade</a>
       </header>
       <section className="card worth">
         <div className="worth-top">
@@ -172,54 +175,27 @@ function Home({ uid, p }: { uid: string; p: Portfolio }) {
       <section className="card">
         <Tabs id="home" value={tab} onChange={setTab} options={[['own', `What I have (${held.length})`], ['wait', `Waiting orders (${p.orders.length})`]]} />
         {tab === 'own' && (held.length ? (
-          <div className="scroll"><table><thead><tr><th>Stock</th><th className="r">Shares</th><th className="r">My price</th><th className="r">Now</th><th className="r"><Term k="unrealized" end>Win or loss</Term></th><th /></tr></thead><tbody>
+          <div className="scroll"><table><thead><tr><th>Holding</th><th className="r">Amount</th><th className="r">My price</th><th className="r">Now</th><th className="r"><Term k="unrealized" end>Win or loss</Term></th><th /></tr></thead><tbody>
             <AnimatePresence initial={false}>{held.map(([sym, pos]) => {
               const px = prices[sym]; const pl = px ? (px - pos.avg) * pos.qty : null
               return <motion.tr key={sym} layout initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0 }} transition={spring}>
                 <td><a href={'#/stock/' + sym}><b>{nameOf(sym)}</b></a><small>{pos.qty < 0 ? 'Sold first, buy back later' : short(sym)}</small></td>
-                <td className="r num">{Math.abs(pos.qty)}</td><td className="r num">{money(pos.avg)}</td>
+                <td className="r num">{units(Math.abs(pos.qty))}</td><td className="r num">{money(pos.avg)}</td>
                 <td className="r">{px ? <Tick value={px} /> : '—'}</td>
                 <td className={'r num ' + tone(pl ?? 0)}>{pl === null ? '—' : signedMoney(pl)}</td>
-                <td className="r"><button className="ghost tiny" disabled={!q.open || !px} title={q.open ? '' : 'The market is closed'} onClick={() => close(sym)}>Close</button></td>
+                <td className="r"><button className="ghost tiny" disabled={!q.bySym[sym]?.open || !px} title={q.bySym[sym]?.open ? '' : 'The market is closed'} onClick={() => close(sym)}>Close</button></td>
               </motion.tr>
             })}</AnimatePresence></tbody></table></div>
         ) : <Empty text="Nothing here yet. Find a stock you know, like the company behind your favourite biscuits." />)}
         {tab === 'wait' && (p.orders.length ? (
-          <div className="scroll"><table><thead><tr><th>Stock</th><th>Plan</th><th className="r">Shares</th><th className="r">Price</th><th /></tr></thead><tbody>
+          <div className="scroll"><table><thead><tr><th>Holding</th><th>Plan</th><th className="r">Amount</th><th className="r">Price</th><th /></tr></thead><tbody>
             {p.orders.map(o => <tr key={o.id}>
               <td><a href={'#/stock/' + o.sym}><b>{nameOf(o.sym)}</b></a></td>
               <td>{o.side === 'buy' ? 'Buy' : 'Sell'} <Term k={o.type}>{o.type === 'limit' ? 'at my price' : 'if it reaches'}</Term></td>
-              <td className="r num">{o.qty}</td><td className="r num">{money(o.price)}</td>
+              <td className="r num">{units(o.qty)}</td><td className="r num">{money(o.price)}</td>
               <td className="r"><button className="ghost tiny" onClick={() => mutate(uid, p.id, c => cancelOrder(c, o.id))}>Cancel</button></td>
             </tr>)}</tbody></table></div>
         ) : <Empty text="No waiting orders. When the market is closed, you can set a price and let your order wait for it." />)}
-      </section>
-    </div>
-  )
-}
-
-function Stocks({ ex }: { ex: string }) {
-  const [text, setText] = useState('')
-  const found = useSearch(text, ex)
-  const [giants, setGiants] = useState<Row[]>([])
-  useEffect(() => { screen('giants', ex, 15).then(setGiants).catch(() => {}) }, [ex])
-  useEffect(() => { if (found?.[0]) preload(found[0].symbol) }, [found]) // the likely pick is ready before it's tapped
-  const rows = found ?? giants
-  const q = useQuotes(rows.slice(0, 20).map(r => r.symbol))
-  return (
-    <div className="stocks">
-      <header className="title"><div><h1>Stocks</h1><p className="muted">Companies on {exchange(ex).name}.</p></div></header>
-      <input className="search" type="search" aria-label="Search for a stock" placeholder="Search a company or ticker" value={text} onChange={e => setText(e.target.value)} />
-      <section className="card stock-list">
-        {found?.length === 0 && <Empty text={`Bully couldn’t find “${text}” on ${exchange(ex).name}. Try another name.`} />}
-        {rows.map(r => {
-          const x = q.bySym[r.symbol]; const pct = x ? (x.price - x.prev) / x.prev * 100 : 0
-          return <a key={r.symbol} href={'#/stock/' + r.symbol} onPointerEnter={() => preload(r.symbol)}>
-            <span className="mono-mark" style={{ background: `hsl(${[...r.symbol].reduce((a, c) => a + c.charCodeAt(0) * 7, 0) % 360} 70% 92%)`, color: `hsl(${[...r.symbol].reduce((a, c) => a + c.charCodeAt(0) * 7, 0) % 360} 70% 25%)` }}>{r.name[0]}</span>
-            <span><b>{r.name}</b><small>{short(r.symbol)}</small></span>
-            {x && <span className="r"><Tick value={x.price} /><small className={'num ' + tone(pct)}>{pct >= 0 ? '+' : ''}{pct.toFixed(2)}%</small></span>}
-          </a>
-        })}
       </section>
     </div>
   )
@@ -280,7 +256,7 @@ function useSettler(uid: string, p: Portfolio | undefined) {
   }, [uid, key])
 }
 
-const NAV = [['home', 'My money'], ['stocks', 'Stocks'], ['watchlist', 'Watchlist'], ['discover', 'Discover'], ['analytics', 'Analytics'], ['history', 'History'], ['settings', 'Settings']]
+const NAV = [['home', 'My money'], ['stocks', 'Markets'], ['watchlist', 'Watchlist'], ['discover', 'Discover'], ['analytics', 'Analytics'], ['history', 'History'], ['settings', 'Settings']]
 
 function Shell({ user }: { user: User }) {
   const hash = useHash()
@@ -289,6 +265,14 @@ function Shell({ user }: { user: User }) {
   const [adding, setAdding] = useState(false)
   const p = list?.find(x => x.id === pid) ?? list?.[0]
   const pick = (id: string) => { setPid(id); setAdding(false); try { localStorage.setItem('pid', id) } catch { /* private window */ } }
+  const seenKey = 'tour:' + user.uid
+  const [seen, setSeen] = useState(() => { try { return !!localStorage.getItem(seenKey) } catch { return true } })
+  const tour = hash === '#/tour' || (list?.length === 0 && !seen) // first visit, or asked for again from the menu
+  const endTour = (make: boolean) => {
+    setSeen(true); try { localStorage.setItem(seenKey, '1') } catch { /* private window */ }
+    if (hash === '#/tour') location.hash = '#/'
+    if (make && list?.length) setAdding(true) // with no portfolio yet, the new-portfolio form opens by itself
+  }
   useSettler(user.uid, p)
   const stockSym = hash.startsWith('#/stock/') ? decodeURIComponent(hash.slice(8)) : ''
   const route = stockSym ? 'stock' : NAV.some(([id]) => id === hash.slice(2)) ? hash.slice(2) : 'home'
@@ -314,13 +298,13 @@ function Shell({ user }: { user: User }) {
             </a>
           })}</div>
         </LayoutGroup>
-        <div className="me"><span>{user.displayName || 'Trader'}</span></div>
+        <div className="me"><span>{user.displayName || 'Trader'}</span><a className="link" href="#/tour">Take the tour</a></div>
       </nav>
       <main className="canvas">
         {list === null ? <div className="boot"><Bully size={72} /><p className="muted">Opening your piggy bank…</p></div> : p && (
           <>
             {route === 'home' && <Home uid={user.uid} p={p} />}
-            {route === 'stocks' && <Stocks key={p.exchange} ex={p.exchange} />}
+            {route === 'stocks' && <Markets key={p.exchange} ex={p.exchange} />}
             {route === 'watchlist' && <Watchlist uid={user.uid} p={p} />}
             {route === 'analytics' && <Analytics p={p} />}
             {route === 'history' && <History p={p} />}
@@ -333,7 +317,8 @@ function Shell({ user }: { user: User }) {
         )}
       </main>
       <AnimatePresence>
-        {list && (list.length === 0 || adding) && (
+        {tour && list && <Tour key="tour" first={!list.length} onClose={endTour} />}
+        {list && !tour && (list.length === 0 || adding) && (
           <NewPortfolio uid={user.uid} first={list.length === 0} onDone={pick} onClose={list.length ? () => setAdding(false) : undefined} />
         )}
       </AnimatePresence>
@@ -344,9 +329,11 @@ function Shell({ user }: { user: User }) {
 function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined)
   useEffect(() => onAuthStateChanged(auth, setUser), [])
-  useEffect(() => { document.getElementById('about')!.hidden = !!user }, [user]) // the public page text in index.html
+  const hash = useHash()
+  useEffect(() => { document.getElementById('about')!.hidden = true }, []) // index.html's text is for search engines; the landing page says it all
   if (user === undefined) return <div className="boot full"><Bully size={72} /></div>
-  return user ? <Shell key={user.uid} user={user} /> : <Login />
+  if (user) return <Shell key={user.uid} user={user} />
+  return hash === '#/login' || hash === '#/signin' ? <Login key={hash} start={hash === '#/login' ? 'up' : 'in'} /> : <Landing />
 }
 
 function Root() {

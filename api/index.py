@@ -20,8 +20,8 @@ http.mount("https://", HTTPAdapter(pool_maxsize=64))  # reuses connections under
 pool = ThreadPoolExecutor(32)  # shared, so one instance can't open unlimited calls to Yahoo
 # id: (symbol suffix, Google Finance code, Yahoo exchange codes)
 EXCHANGES = {
-    "NSE": (".NS", "NSE", ("NSI",)), "BSE": (".BO", "BOM", ("BSE",)), "NASDAQ": ("", "NASDAQ", ("NMS", "NGM", "NCM")),
-    "NYSE": ("", "NYSE", ("NYQ",)), "LSE": (".L", "LON", ("LSE",)), "TSX": (".TO", "TSE", ("TOR",)), "TSXV": (".V", "CVE", ("VAN",)),
+    "NSE": (".NS", "NSE", ("NSI",)), "BSE": (".BO", "BOM", ("BSE",)), "NASDAQ": ("", "NASDAQ", ("NMS", "NGM", "NCM", "PCX", "BTS", "ASE")),
+    "NYSE": ("", "NYSE", ("NYQ", "PCX", "BTS", "ASE")), "LSE": (".L", "LON", ("LSE",)), "TSX": (".TO", "TSE", ("TOR",)), "TSXV": (".V", "CVE", ("VAN",)),
     "ASX": (".AX", "ASX", ("ASX",)), "HKEX": (".HK", "HKG", ("HKG",)), "TSE": (".T", "TYO", ("JPX",)), "KRX": (".KS", "KRX", ("KSC",)),
     "KOSDAQ": (".KQ", "KOSDAQ", ("KOE",)), "SSE": (".SS", "SHA", ("SHH",)), "SZSE": (".SZ", "SHE", ("SHZ",)), "TWSE": (".TW", "TPE", ("TAI",)),
     "SGX": (".SI", "SGX", ("SES",)), "XETRA": (".DE", "ETR", ("GER",)), "FRA": (".F", "FRA", ("FRA",)), "EPA": (".PA", "EPA", ("PAR",)),
@@ -32,7 +32,19 @@ EXCHANGES = {
     "IDX": (".JK", "IDX", ("JKT",)), "SET": (".BK", "BKK", ("SET",)), "KLSE": (".KL", "KLSE", ("KLS",)), "NZX": (".NZ", "NZE", ("NZE",)),
     "SAU": (".SR", "TADAWUL", ("SAU",)), "TASE": (".TA", "TLV", ("TLV",)),
 }
-GOOGLE = {code: x[1] for x in EXCHANGES.values() for code in x[2]}
+GOOGLE = {code: x[1] for x in EXCHANGES.values() for code in x[2]} | {"PCX": "NYSEARCA", "BTS": "BATS", "ASE": "NYSEAMERICAN"}
+# Most US funds list on NYSE Arca and Cboe, which both US portfolios can trade.
+# Yahoo's fund screener has nothing for these exchanges, so their best-known funds are listed by hand.
+FUNDS = {"NSE": "NIFTYBEES BANKBEES JUNIORBEES MID150BEES ITBEES PSUBNKBEES CPSEETF MON100 MAFANG HNGSNGBEES GOLDBEES SILVERBEES "
+                "LIQUIDBEES GILT5YBEES LTGILTBEES EBBETF0433", "BSE": "NIFTYBEES GOLDBEES",
+         "BVMF": "BOVA11 IVVB11 SMAL11 DIVO11 HASH11 GOLD11 IMAB11 B5P211 IRFM11 FIXA11"}
+# Yahoo's charts call these funds plain shares, so they're named here.
+FUND_SYMS = {s + EXCHANGES[ex][0] for ex, names in FUNDS.items() for s in names.split()}
+# A fund is a bond fund when its name says so, in English or the Portuguese Brazil's funds use.
+BOND = re.compile(r"\b(bonds?|gilts?|g-sec|treasur(y|ies)|govt|government|aggregate|fixed income|money market|liquid(ity)?|t-bills?|"
+                  r"sovereign|muni|ima-b\d*|irf-m|renda fixa)\b", re.I)
+# Yahoo writes a few currencies in hundredths; these are the whole currency each one belongs to.
+WHOLE = {"GBp": "GBP", "GBX": "GBP", "ZAc": "ZAR", "ZAC": "ZAR", "ILA": "ILS"}
 # Yahoo quotes these in hundredths (London in pence), so everything is scaled to the main currency.
 SUBUNIT = {"GBp": 100, "GBX": 100, "ZAc": 100, "ZAC": 100, "ILA": 100}
 # range: (candle size, candles merged into one, days fetched per page). Every tab opens on about the same number of bars.
@@ -43,7 +55,9 @@ LISTS = {"climbers": ("regularMarketChangePercent", True), "drops": ("regularMar
 # Yahoo refuses any request reaching further back than this for small candles.
 OLDEST = {"5m": 59, "30m": 59, "1h": 729}
 store: dict = {}
-locks = [threading.Lock() for _ in range(64)]
+# One lock per key: a fetch that waits on other keys' fetches (a fund list on its funds' prices) can't wait on itself.
+locks: dict[str, threading.Lock] = {}
+guard = threading.Lock()
 
 
 @app.exception_handler(requests.RequestException)
@@ -61,7 +75,9 @@ def shared(key: str, ttl: float, fn, stale: float = 0):
 
     hit = ready()
     if not hit:
-        with locks[hash(key) % 64]:
+        with guard:
+            lock = locks.setdefault(key, threading.Lock())
+        with lock:
             hit = ready()
             if not hit:
                 old, now = store.get(key), time.time()
@@ -72,6 +88,7 @@ def shared(key: str, ttl: float, fn, stale: float = 0):
                     hit = (now + 5, old[1], old[2]) if keep else (now + 5, e, now)
                 if len(store) > 20000:  # ponytail: drops everything at the cap; only a burst of junk symbols gets here
                     store.clear()
+                    locks.clear()
                 store[key] = hit
     if isinstance(hit[1], Exception):
         raise hit[1]
@@ -107,6 +124,17 @@ def chart(sym: str, **params):
         raise requests.RequestException(f"unreadable answer for {sym}") from e
 
 
+def kind_of(kind: str | None, name: str):
+    kind = kind or "EQUITY"
+    return "BOND" if kind in ("ETF", "MUTUALFUND") and BOND.search(name) else kind
+
+
+def title(m: dict, sym: str):
+    name = m.get("longName") or m.get("shortName") or sym
+    # Yahoo calls a coin by its pair, like "Bitcoin INR", but the portfolio's currency already says that.
+    return re.sub(r"\s+[A-Z]{3}$", "", name) if m.get("instrumentType") == "CRYPTOCURRENCY" else name
+
+
 def fetch_quote(sym: str):
     c = chart(sym, range="5d", interval="1d")
     try:
@@ -118,8 +146,9 @@ def fetch_quote(sym: str):
         before = days[:-1] if days and days[-1][0] >= period["start"] else days
         # Yahoo sometimes sends a thinly reported stock with only today's bar.
         prev = before[-1][1] if before else m.get("chartPreviousClose") or m["regularMarketPrice"]
-        return {"symbol": sym, "name": m.get("longName") or m.get("shortName") or sym, "price": m["regularMarketPrice"] / k,
-                "prev": prev / k, "start": period["start"], "end": period["end"]}
+        name = title(m, sym)
+        return {"symbol": sym, "name": name, "price": m["regularMarketPrice"] / k, "prev": prev / k,
+                "start": period["start"], "end": period["end"], "kind": kind_of("ETF" if sym in FUND_SYMS else m.get("instrumentType"), name)}
     except (KeyError, IndexError, TypeError) as e:
         raise requests.RequestException(f"no price for {sym}") from e
 
@@ -140,7 +169,8 @@ def quotes(symbols: str, res: Response):
         raise HTTPException(503, "market data is unavailable")
     # Yahoo's trading period knows about holidays, unlike a fixed clock check.
     now = time.time()
-    rows = [{"symbol": q["symbol"], "name": q["name"], "price": q["price"], "prev": q["prev"], "open": q["start"] <= now < q["end"]} for q in found]
+    rows = [{"symbol": q["symbol"], "name": q["name"], "price": q["price"], "prev": q["prev"], "kind": q["kind"],
+             "open": q["start"] <= now < q["end"]} for q in found]
     return {"open": any(r["open"] for r in rows), "quotes": rows}
 
 
@@ -195,18 +225,18 @@ def search(q: str, ex: str, res: Response):
     # Yahoo ranks across the whole world, so also try the typed word as a ticker on this exchange.
     words = pool.submit(yahoo, "/v1/finance/search", q=text, quotesCount=40, newsCount=0, enableFuzzyQuery="true")
     exact = pool.submit(quote, ticker) if re.fullmatch(r"[A-Z0-9&-]{1,12}", text.upper()) else None
-    rows = [{"symbol": x["symbol"], "name": x.get("shortname") or x.get("longname") or x["symbol"]}
+    rows = [{"symbol": x["symbol"], "name": (n := x.get("shortname") or x.get("longname") or x["symbol"]), "kind": kind_of(x.get("quoteType"), n)}
             for x in words.result().json().get("quotes", [])
             if x.get("exchange") in codes and x.get("quoteType") in ("EQUITY", "ETF")]
     hit = exact.result() if exact else None
     if hit and not suffix and not any(r["symbol"] == ticker for r in rows):
         hit = None  # a bare US ticker could be on the other US exchange
     if hit and all(r["symbol"] != ticker for r in rows):
-        rows.insert(0, {"symbol": ticker, "name": hit["name"]})
+        rows.insert(0, {"symbol": ticker, "name": hit["name"], "kind": hit["kind"]})
     if len(rows) < 5:  # Yahoo's top results are worldwide, so a smaller exchange's own listing can miss them
         try:
             word, known = text.lower(), {r["symbol"] for r in rows}
-            rows += [{"symbol": x["symbol"], "name": x.get("longName") or x.get("shortName") or x["symbol"]} for x in biggest(ex)
+            rows += [{"symbol": x["symbol"], "name": x.get("longName") or x.get("shortName") or x["symbol"], "kind": "EQUITY"} for x in biggest(ex)
                      if x["symbol"] not in known and x["symbol"].endswith(suffix) and word in f'{x.get("longName")} {x.get("shortName")}'.lower()][:10]
         except requests.RequestException:
             pass  # the list is an extra, so what Yahoo found still goes back
@@ -220,17 +250,20 @@ def about(name: str, ticker: str):
     return key, re.compile(rf"\b({re.escape(ticker)}|{re.escape(key)})\b", re.I)
 
 
-def stock_news(sym: str, name: str):
-    ticker = sym.split(".")[0]
+def stock_news(sym: str, name: str, kind: str):
+    # "BTC-INR" is searched as BTC, and an index like ^NSEI by its name alone.
+    ticker = sym.split(".")[0].split("-")[0] if kind == "CRYPTOCURRENCY" else sym.split(".")[0]
     key, wanted = about(name, ticker)
+    if kind == "INDEX":
+        ticker = key
     place = {"hl": "en-IN", "gl": "IN", "ceid": "IN:en"} if sym.endswith((".NS", ".BO")) else {"hl": "en-US", "gl": "US", "ceid": "US:en"}
-    rss = http.get("https://news.google.com/rss/search", timeout=6, params={"q": f'("{key}" OR {ticker}) stock when:30d', **place}).text
+    rss = http.get("https://news.google.com/rss/search", timeout=6, params={"q": f'("{key}" OR {ticker}) {"crypto" if kind == "CRYPTOCURRENCY" else "stock"} when:30d', **place}).text
     items, seen = [], set()
     for title, link, date in re.findall(r"<item><title>(.*?)</title><link>(.*?)</link>.*?<pubDate>(.*?)</pubDate>", rss, re.S):
         head, _, source = html.unescape(title).rpartition(" - ")
         # Live price pages aren't news. Headlines listing several companies aren't about this one.
         if (not wanted.search(head) or head in seen or head.count(",") >= 2
-                or re.search(r"(share|stock) price\b.*\b(today|live|chart|prediction)|(share|stock) price\W*$", head, re.I)):
+                or re.search(r"(share|stock) price\b.*\b(today|live|chart|prediction)|(share|stock) price\W*$|charts?, data", head, re.I)):
             continue
         seen.add(head)
         items.append({"title": head, "source": source, "url": html.unescape(link), "at": parsedate_to_datetime(date)})
@@ -243,12 +276,12 @@ def stock(symbol: str, res: Response):
     """Specs from Google Finance, and news searched by company name so it's about this stock only."""
     sym = check(symbol)
     m = chart(sym, range="1d", interval="1d")["meta"]
-    name = m.get("longName") or m.get("shortName") or sym
+    name, kind = title(m, sym), m.get("instrumentType") or "EQUITY"
     code = GOOGLE.get(m.get("exchangeName"), "NSE")
 
     def news():
         try:
-            return stock_news(sym, name)
+            return stock_news(sym, name, kind)
         except (requests.RequestException, ValueError):
             return []
 
@@ -260,13 +293,18 @@ def stock(symbol: str, res: Response):
         return dict(re.findall(r'class="SwQK7">([^<]+)</div><div class="dO6ijd">([^<]*)', page))
 
     found = pool.submit(news)  # the two lookups don't depend on each other, so neither waits
-    specs = facts(code)
+    specs = facts(code) if kind in ("EQUITY", "ETF") else {}  # Google has no page for coins and indexes under these codes
     if not specs and code == "BOM":  # Google lists BSE stocks by number, but the same company is on NSE by name
         specs = facts("NSE")
     for k, v in specs.items():  # Google shows these in hundredths too, like the prices scaled above
         hit = re.fullmatch(r"(GBX|ZAC|ILA)\s*([\d,.]+)", v)
         if hit:
             specs[k] = f"{ {'GBX': '£', 'ZAC': 'R', 'ILA': '₪'}[hit[1]] }{float(hit[2].replace(',', '')) / 100:,.2f}"
+    if not specs:  # Yahoo knows the basics for everything, so a coin or an index still gets some facts
+        k = SUBUNIT.get(m.get("currency"), 1)
+        specs = {label: f"{m[f] / k:,.2f}" for label, f in (("52-wk high", "fiftyTwoWeekHigh"), ("52-wk low", "fiftyTwoWeekLow")) if m.get(f)}
+        if m.get("regularMarketVolume"):
+            specs["Volume"] = f'{m["regularMarketVolume"]:,}'
     # A page with nothing on it may just be Google having a moment, so it isn't remembered for long.
     res.headers["Cache-Control"] = f"s-maxage={600 if specs else 60}, stale-while-revalidate=86400"
     return {"name": name, "specs": specs, "news": found.result()}
@@ -275,10 +313,11 @@ def stock(symbol: str, res: Response):
 crumb = ""
 
 
-def screener(codes):
+def screener(codes, kind="EQUITY"):
     """Yahoo's screener needs a session crumb; yfinance only ever did this for us, at the cost of pandas on every cold start."""
     global crumb
-    body = {"size": 150, "offset": 0, "sortField": "intradaymarketcap", "sortType": "DESC", "quoteType": "EQUITY", "userId": "", "userIdType": "guid",
+    body = {"size": 150, "offset": 0, "sortField": "intradaymarketcap" if kind == "EQUITY" else "fundnetassets", "sortType": "DESC",
+            "quoteType": kind, "userId": "", "userIdType": "guid",
             "query": {"operator": "or", "operands": [{"operator": "eq", "operands": ["exchange", c]} for c in codes]}}
     for _ in range(2):
         if not crumb:
@@ -316,3 +355,36 @@ def discover(list: str, ex: str, res: Response, n: int = 8):
                     "price": x["regularMarketPrice"] / k if x.get("regularMarketPrice") else None,
                     "pct": x.get("regularMarketChangePercent"), "yield": x.get("dividendYield"), "cap": x.get("marketCap")})
     return out
+
+
+def fund_rows(ex: str):
+    suffix, _, codes = EXCHANGES[ex]
+    if ex in FUNDS:
+        return [{"symbol": q["symbol"], "name": q["name"], "price": q["price"], "pct": (q["price"] / q["prev"] - 1) * 100 if q["prev"] else None}
+                for q in pool.map(quote, [s + suffix for s in FUNDS[ex].split()]) if q]
+    rows = screener(codes, "ETF")
+    # Funds also list in other currencies; only those in the exchange's own currency fit its portfolios.
+    try:
+        main = Counter(WHOLE.get(x.get("currency"), x.get("currency")) for x in biggest(ex)).most_common(1)[0][0]
+    except (requests.RequestException, IndexError):
+        main = None
+    out = []
+    for x in rows:
+        if not x.get("regularMarketPrice") or not x["symbol"].endswith(suffix) or (suffix == "" and "." in x["symbol"]):
+            continue
+        if main and WHOLE.get(x.get("currency"), x.get("currency")) != main:
+            continue
+        out.append({"symbol": x["symbol"], "name": x.get("longName") or x.get("shortName") or x["symbol"],
+                    "price": x["regularMarketPrice"] / SUBUNIT.get(x.get("currency"), 1), "pct": x.get("regularMarketChangePercent")})
+    return out
+
+
+@app.get("/api/funds")
+def funds(ex: str, res: Response):
+    """The exchange's biggest funds, split into bond funds and the rest."""
+    if ex not in EXCHANGES:
+        raise HTTPException(400, "bad exchange")
+    rows = shared("funds:" + ex, 300, lambda: fund_rows(ex), stale=86400)
+    res.headers["Cache-Control"] = "s-maxage=300, stale-while-revalidate=3600"
+    split = [{**r, "kind": "BOND" if BOND.search(r["name"]) else "ETF"} for r in rows]
+    return {"etfs": [r for r in split if r["kind"] == "ETF"][:30], "bonds": [r for r in split if r["kind"] == "BOND"][:30]}

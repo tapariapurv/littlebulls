@@ -2,7 +2,7 @@ import { Suspense, lazy, useEffect, useState, type FormEvent } from 'react'
 import { sendPasswordResetEmail, signOut, updateProfile, type User } from 'firebase/auth'
 import { askToNotify, auth, deletePortfolio, mutate, nameOf, preload, remember, setSetting, useQuotes, useSearch, useSettings } from './data'
 import { analytics, balanceHistory, resetPortfolio, uid as newId, type Portfolio } from './engine'
-import { exchange, short } from './markets'
+import { exchange, short, units } from './markets'
 import { Empty, Tabs, Term, Tick, money, signedMoney, tone, useToast } from './ui'
 
 const ICONS: Record<string, string> = {
@@ -117,7 +117,7 @@ export function History({ p }: { p: Portfolio }) {
             {p.done.map(o => <tr key={o.id}>
               <td><a href={'#/stock/' + o.sym}><b>{nameOf(o.sym)}</b></a></td>
               <td>{o.side === 'buy' ? 'Buy' : 'Sell'}<small>{o.exit === 'tp' ? 'Take my win' : o.exit === 'sl' ? 'Stop my loss' : KIND[o.type]}</small></td>
-              <td className="r num">{o.qty}</td><td className="r num">{money(o.price)}</td>
+              <td className="r num">{units(o.qty)}</td><td className="r num">{money(o.price)}</td>
               <td>{o.status === 'filled' ? 'Happened' : 'Cancelled'}</td><td className="r muted">{time(o.closed)}</td>
             </tr>)}</tbody></table></div>
         ) : <Empty text="Orders that happened or were cancelled will show up here." />)}
@@ -125,7 +125,7 @@ export function History({ p }: { p: Portfolio }) {
           <div className="scroll"><table><thead><tr><th>Stock</th><th>What happened</th><th className="r">Price</th><th className="r"><Term k="realized" end>Locked in</Term></th><th className="r">When</th></tr></thead><tbody>
             {p.trades.slice(0, 200).map(t => <tr key={t.id}>
               <td><a href={'#/stock/' + t.sym}><b>{nameOf(t.sym)}</b></a></td>
-              <td>{t.forced ? 'Bully closed ' : t.side === 'buy' ? 'Bought ' : 'Sold '}{t.qty}{t.forced && <small>Losses ate half the deposit</small>}</td>
+              <td>{t.forced ? 'Bully closed ' : t.side === 'buy' ? 'Bought ' : 'Sold '}{units(t.qty)}{t.forced && <small>Losses ate half the deposit</small>}</td>
               <td className="r num">{money(t.price)}</td>
               <td className={'r num ' + tone(t.pnl)}>{t.pnl ? signedMoney(t.pnl) : '—'}</td>
               <td className="r muted">{time(t.at)}</td>

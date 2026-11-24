@@ -78,7 +78,7 @@ export function cached<T>(path: string, ttl: number): Promise<T> {
   return value
 }
 
-export type Quote = { symbol: string; name: string; price: number; prev: number; open: boolean }
+export type Quote = { symbol: string; name: string; price: number; prev: number; open: boolean; kind?: string }
 type Quotes = { bySym: Record<string, Quote>; failed: boolean }
 
 let lastQuotes: Quotes = { bySym: {}, failed: false } // shown instantly when moving between pages
@@ -135,7 +135,7 @@ const names = read<Record<string, string>>('names', {})
 export const remember = (sym: string, name: string) => { if (name && names[sym] !== name) { names[sym] = name; write('names', names) } }
 export const nameOf = (sym: string) => names[sym] ?? short(sym)
 
-export type Row = { symbol: string; name: string; price?: number | null; pct?: number | null; yield?: number | null; cap?: number | null }
+export type Row = { symbol: string; name: string; price?: number | null; pct?: number | null; yield?: number | null; cap?: number | null; kind?: string }
 export const search = (text: string, ex: string) => cached<Row[]>(`search?q=${encodeURIComponent(text.trim())}&ex=${ex}`, 600000)
 /** Search results for what's typed, after a short pause. An older answer arriving late can't replace a newer one. */
 export function useSearch(text: string, ex: string) {
@@ -153,6 +153,10 @@ export function useSearch(text: string, ex: string) {
 }
 export const screen = (list: string, ex: string, n = 8) => cached<Row[]>(`discover?list=${list}&ex=${ex}&n=${n}`, 120000)
   .then(r => { r.forEach(x => remember(x.symbol, x.name)); return r })
+
+/** The exchange's biggest funds, with bond funds apart. */
+export const funds = (ex: string) => cached<{ etfs: Row[]; bonds: Row[] }>('funds?ex=' + ex, 300000)
+  .then(r => { [...r.etfs, ...r.bonds].forEach(x => remember(x.symbol, x.name)); return r })
 
 const DEFAULTS = { chartButtons: true, askFirst: true, chartLines: true, sound: true, notify: false, calm: false, shares: 1, list: 'main' }
 export type Settings = typeof DEFAULTS

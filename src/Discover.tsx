@@ -14,9 +14,9 @@ function Pulse({ ex }: { ex: string }) {
     <section className="card pulse" aria-label="How the market is doing today">
       {INDEXES.map(([sym, name]) => {
         const x = q.bySym[sym]; const pct = x ? (x.price - x.prev) / x.prev * 100 : 0
-        return <div key={sym}><small>{name}</small>
+        return <a key={sym} href={'#/stock/' + sym} onPointerEnter={() => preload(sym)}><small>{name}</small>
           <b className="num">{x ? x.price.toLocaleString(undefined, { maximumFractionDigits: 0 }) : '—'}</b>
-          <small className={'num ' + tone(pct)}>{x ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}% today` : ''}</small></div>
+          <small className={'num ' + tone(pct)}>{x ? `${pct >= 0 ? '+' : ''}${pct.toFixed(2)}% today` : ''}</small></a>
       })}
     </section>
   )

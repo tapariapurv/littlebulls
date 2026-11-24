@@ -50,9 +50,32 @@ export const EXCHANGES: Market[] = [
 ]
 
 export const exchange = (id: string) => EXCHANGES.find(x => x.id === id) ?? EXCHANGES[0]
-export const short = (sym: string) => sym.replace(/\.[A-Z]+$/, '')
-/** US tickers have no suffix, so NASDAQ and NYSE can't be told apart by symbol alone. */
+
+// What Yahoo calls each kind of thing. Bond funds are ETFs whose name says bonds; the API tells them apart.
+export type Kind = 'EQUITY' | 'ETF' | 'BOND' | 'INDEX' | 'CRYPTOCURRENCY'
+export const KIND: Record<string, [string, string]> = { // label, glossary key
+  EQUITY: ['Stock', 'stock'], ETF: ['ETF', 'etf'], MUTUALFUND: ['Fund', 'etf'], BOND: ['Bond fund', 'bond'], INDEX: ['Index', 'index'], CRYPTOCURRENCY: ['Crypto', 'crypto'],
+}
+// Every one of these is priced by Yahoo in every currency below, which are the only ones it prices coins in.
+export const COINS: [string, string][] = [['BTC', 'Bitcoin'], ['ETH', 'Ethereum'], ['SOL', 'Solana'], ['XRP', 'XRP'], ['BNB', 'BNB'], ['DOGE', 'Dogecoin'],
+  ['ADA', 'Cardano'], ['TRX', 'TRON'], ['AVAX', 'Avalanche'], ['LINK', 'Chainlink'], ['DOT', 'Polkadot'], ['LTC', 'Litecoin'], ['BCH', 'Bitcoin Cash'], ['XLM', 'Stellar']]
+export const CRYPTO_CCYS = ['USD', 'EUR', 'GBP', 'INR', 'JPY', 'CAD', 'AUD', 'KRW', 'CNY']
+const CCYS = new Set(EXCHANGES.map(x => x.currency))
+/** A coin priced in a currency, like BTC-INR. */
+export const coin = (sym: string) => { const m = /^([A-Z0-9]+)-([A-Z]{3})$/.exec(sym); return m && CCYS.has(m[2]) ? { base: m[1], ccy: m[2] } : null }
+export const isIndex = (sym: string) => sym.startsWith('^') || EXCHANGES.some(x => x.indexes.some(i => i[0] === sym))
+export const kindOf = (sym: string, kind?: string) => coin(sym) ? 'CRYPTOCURRENCY' : isIndex(sym) ? 'INDEX' : kind ?? 'EQUITY'
+/** Coins and indexes cost too much a piece for pretend money, so they're bought in parts. Shares and funds are whole. */
+export const fractional = (sym: string) => !!coin(sym) || isIndex(sym)
+export const short = (sym: string) => coin(sym)?.base ?? sym.replace(/^\^/, '').replace(/\.[A-Z]+$/, '')
+export const units = (n: number) => n.toLocaleString(undefined, { maximumFractionDigits: 8 })
+/** "3 shares", "0.0125 BTC", "1.5 units". */
+export const amount = (sym: string, n: number) => `${units(n)} ${coin(sym) ? short(sym) : isIndex(sym) ? (n === 1 ? 'unit' : 'units') : n === 1 ? 'share' : 'shares'}`
+/** What a portfolio can trade: its exchange's listings, its indexes, and coins in its currency.
+ *  US tickers have no suffix, so NASDAQ and NYSE can't be told apart by symbol alone. */
 export const matches = (id: string, sym: string) => {
-  const { suffix } = exchange(id)
-  return suffix ? sym.endsWith(suffix) : !sym.includes('.')
+  const m = exchange(id), c = coin(sym)
+  if (c) return c.ccy === m.currency
+  if (isIndex(sym)) return m.indexes.some(i => i[0] === sym)
+  return m.suffix ? sym.endsWith(m.suffix) : !sym.includes('.')
 }

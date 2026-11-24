@@ -2,8 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { CandlestickSeries, LineSeries, createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts'
 import { AnimatePresence, motion } from 'motion/react'
 import { askToNotify, blip, candles, getSettings, mutate, nameOf, older, setSetting, stockInfo, useQuotes, useSettings, zoneOf, type Info } from './data'
-import { MARGIN, addAlert, addOrder, canAfford, marketOrder, summary, type Candle, type Portfolio, type Side } from './engine'
-import { SPEC_WORDS, exchange, matches, short } from './markets'
+import { MARGIN, addAlert, addOrder, canAfford, marketOrder, marketable, summary, type Candle, type Portfolio, type Side } from './engine'
+import { KIND, SPEC_WORDS, amount, coin, exchange, fractional, isIndex, kindOf, matches, short, units } from './markets'
 import { Bully, Modal, Num, Tabs, Term, Tick, decimal, money, signedMoney, spring, tone, useToast } from './ui'
 
 type Range = '1D' | '5D' | '1M' | '6M' | '1Y' | '5Y'
@@ -143,20 +143,28 @@ function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: 
   const [slText, setSl] = useState('')
   const busy = useRef(false) // a ref because a double click can land before React redraws
   const [shake, setShake] = useState(0)
+  const [cash, setCash] = useState('') // coins and indexes are bought by how much money to spend
+  const [all, setAll] = useState(false) // "everything I own" stays exact, with no rounding dust left behind
 
+  const frac = fractional(symbol)
   const prices = price ? { [symbol]: price } : {}
-  const at = type === 'market' ? price ?? 0 : Number(typed) || price || 0 // a blank box means the price shown in it
+  const typedAt = type === 'market' ? price ?? 0 : Number(typed) || price || 0 // a blank box means the price shown in it
+  // A limit or stop the price has already passed happens now, at today's price, which is as good or better.
+  const now = open && type !== 'market' && !!price && marketable(side, type, typedAt, price)
+  const at = now ? price! : typedAt
   const s = summary(p, prices)
   const held = p.positions[symbol]?.qty ?? 0
-  const isShort = side === 'sell' && qty > Math.max(held, 0)
-  const afford = canAfford(p, prices, symbol, side, qty, at)
-  const deposit = qty * at * MARGIN
+  const n = all ? Math.abs(held) : frac ? (at ? Math.floor(Number(cash) / at * 1e8) / 1e8 : 0) : qty
+  const isShort = side === 'sell' && n > Math.max(held, 0)
+  const afford = canAfford(p, prices, symbol, side, n, at)
+  const deposit = n * at * MARGIN
   const tp = exits ? Number(tpText) || undefined : undefined, sl = exits ? Number(slText) || undefined : undefined
   const up = side === 'buy' ? 1 : -1 // a take-win sits past your price in the winning direction, a stop on the other side
   const badExit = at > 0 && ((tp && (tp - at) * up <= 0) || (sl && (sl - at) * up >= 0))
-  const ready = at > 0 && qty > 0 && afford && !badExit
+  const ready = at > 0 && n > 0 && afford && !badExit
   const word = side === 'buy' ? 'Buy' : 'Sell'
-  const shares = `${qty} ${qty === 1 ? 'share' : 'shares'}`
+  const shares = amount(symbol, n)
+  const pickSide = (x: Side) => { setSide(x); setAll(false) }
 
   async function place() {
     if (!ready) { setShake(n => n + 1); return }
@@ -165,12 +173,13 @@ function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: 
     setTimeout(() => { busy.current = false }, 400)
     const first = p.trades.length === 0
     // The trade shows straight away while it saves; if the save fails it comes back off the screen and this says so.
-    mutate(uid, p.id, cur => type === 'market'
-      ? marketOrder(cur, symbol, side, qty, at, { tp, sl })
-      : addOrder(cur, { sym: symbol, side, qty, type, price: at, tp, sl }))
+    mutate(uid, p.id, cur => type === 'market' || now
+      ? marketOrder(cur, symbol, side, n, at, { tp, sl }, false, type)
+      : addOrder(cur, { sym: symbol, side, qty: n, type, price: at, tp, sl }))
       .catch(() => toast({ title: 'That didn’t go through', body: 'Check your internet and try again.', mood: 'hmm' }))
     blip()
-    if (type === 'market') toast(first
+    if (now) toast({ title: `${word === 'Buy' ? 'Bought' : 'Sold'} ${shares} right away`, body: `The price was already past ${money(typedAt)}, so it happened now at ${money(at)}.`, mood: first ? 'wow' : undefined })
+    else if (type === 'market') toast(first
       ? { title: 'Your first trade!', body: `${word === 'Buy' ? 'Bought' : 'Sold'} ${shares} at ${money(at)}. Bully is proud of you for trying.`, mood: 'wow' }
       : { title: `${word === 'Buy' ? 'Bought' : 'Sold'} ${shares}`, body: `At ${money(at)} each.` })
     else toast({ title: 'Order is waiting', body: `${word} ${shares} when the price reaches ${money(at)}.` })
@@ -180,7 +189,7 @@ function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: 
     <div className="ticket">
       <div className={'seg ' + side} role="tablist">
         {(['buy', 'sell'] as Side[]).map(x => (
-          <button key={x} role="tab" aria-selected={side === x} onClick={() => setSide(x)} className={side === x ? 'on' : ''}>
+          <button key={x} role="tab" aria-selected={side === x} onClick={() => pickSide(x)} className={side === x ? 'on' : ''}>
             {side === x && <motion.i layoutId="side" transition={spring} />}<span>{x === 'buy' ? 'Buy' : 'Sell'}</span>
           </button>
         ))}
@@ -191,19 +200,25 @@ function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: 
       ]} />
       {type === 'market' && !open && <p className="note">The market is closed, so Bully can’t trade right now. Pick a price and your order will wait for it.</p>}
       <div className="field-row">
-        <label>Shares
+        {frac ? <label>Money to {side === 'buy' ? 'spend' : 'sell'}
+          <input inputMode="decimal" value={all ? '' : cash} placeholder={all ? 'Everything' : '0'} onChange={e => { setCash(decimal(e.target.value)); setAll(false) }} />
+          <small>{n > 0 ? `That’s ${amount(symbol, n)}` : `You can buy part of one ${coin(symbol) ? 'coin' : 'unit'}`}</small>
+        </label> : <label>Shares
           <span className="stepper">
-            <button type="button" aria-label="Fewer shares" onClick={() => setQty(Math.max(1, qty - 1))}>-</button>
-            <input inputMode="numeric" value={qty} onChange={e => setQty(Math.max(0, Math.floor(Number(e.target.value)) || 0))} />
-            <button type="button" aria-label="More shares" onClick={() => setQty(qty + 1)}>+</button>
+            <button type="button" aria-label="Fewer shares" onClick={() => { setQty(Math.max(1, n - 1)); setAll(false) }}>-</button>
+            <input inputMode="numeric" value={n} onChange={e => { setQty(Math.max(0, Math.floor(Number(e.target.value)) || 0)); setAll(false) }} />
+            <button type="button" aria-label="More shares" onClick={() => { setQty(n + 1); setAll(false) }}>+</button>
           </span>
-        </label>
+        </label>}
         {type !== 'market' && (
           <label>Your price
             <input inputMode="decimal" value={typed} placeholder={price?.toFixed(2)} onChange={e => setTyped(decimal(e.target.value))} />
           </label>
         )}
       </div>
+      {held !== 0 && <div className="chips"><button type="button" className={all ? 'on' : ''} onClick={() => { setSide(held > 0 ? 'sell' : 'buy'); setAll(true) }}>
+        {held > 0 ? 'Sell' : 'Buy back'} everything ({amount(symbol, Math.abs(held))})</button></div>}
+      {now && <p className="note">The price is already past yours, so this happens right away at {money(at)}.</p>}
       <label className="check"><input type="checkbox" checked={exits} onChange={e => setExits(e.target.checked)} /> Plan my way out</label>
       {exits && <div className="field-row">
         <label><Term k="tp">Take my win at</Term><input inputMode="decimal" value={tpText} placeholder="Optional" onChange={e => setTp(decimal(e.target.value))} /></label>
@@ -221,7 +236,7 @@ function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: 
           </motion.p>
         )}
       </AnimatePresence>
-      {at > 0 && !afford && qty > 0 && <p className="note bad">That’s more than you can use right now. Try fewer shares.</p>}
+      {at > 0 && !afford && n > 0 && <p className="note bad">That’s more than you can use right now. Try a smaller amount.</p>}
       <motion.button key={shake} className={'primary ' + side} onClick={place} disabled={type === 'market' && !open}
         animate={shake ? { x: [0, -6, 6, -3, 3, 0] } : undefined} transition={{ duration: 0.3 }} whileTap={{ scale: 0.97 }}>
         {`${word} ${shares}`}
@@ -283,7 +298,7 @@ export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: s
   const toggleWatch = () => mutate(uid, p.id, c => ({ ...c, watchlists: c.watchlists.map(l => l.id === list.id ? { ...l, syms: watching ? l.syms.filter(x => x !== symbol) : [...l.syms, symbol] } : l) }))
     .then(() => { setSetting({ list: list.id }); toast({ title: watching ? `Removed from ${list.name}` : `Added to ${list.name}`, body: name }) })
   function quick(side: Side) {
-    if (!quote || !canAfford(p, prices, symbol, side, qty, quote.price)) { toast({ title: 'That’s more than you can use', body: 'Try fewer shares.', mood: 'hmm' }); return }
+    if (!quote || !canAfford(p, prices, symbol, side, qty, quote.price)) { toast({ title: 'That’s more than you can use', body: 'Try a smaller amount.', mood: 'hmm' }); return }
     if (busy.current) return // a double click isn't two trades
     if (set.askFirst && !confirm(`${side === 'buy' ? 'Buy' : 'Sell'} ${qty} ${short(symbol)} at about ${money(quote.price)}?`)) return
     busy.current = true
@@ -291,29 +306,30 @@ export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: s
     mutate(uid, p.id, c => marketOrder(c, symbol, side, qty, quote.price))
       .catch(() => toast({ title: 'That didn’t go through', body: 'Check your internet and try again.', mood: 'hmm' }))
     blip()
-    toast({ title: `${side === 'buy' ? 'Bought' : 'Sold'} ${qty}`, body: `At ${money(quote.price)} each.` })
+    toast({ title: `${side === 'buy' ? 'Bought' : 'Sold'} ${amount(symbol, qty)}`, body: `At ${money(quote.price)} each.` })
   }
   const lines: Line[] = !set.chartLines ? [] : [
-    ...(pos ? [{ price: pos.avg, title: `${pos.qty > 0 ? 'You own' : 'You sold'} ${Math.abs(pos.qty)}`, color: '#1d5fd6' }] : []),
+    ...(pos ? [{ price: pos.avg, title: `${pos.qty > 0 ? 'You own' : 'You sold'} ${units(Math.abs(pos.qty))}`, color: '#1d5fd6' }] : []),
     ...p.orders.filter(o => o.sym === symbol).map(o => ({
       price: o.price, color: o.exit === 'tp' ? '#2f7a45' : o.exit === 'sl' ? '#c41c29' : '#8a6d1f',
-      title: o.exit === 'tp' ? 'Take win' : o.exit === 'sl' ? 'Stop loss' : `${o.side === 'buy' ? 'Buy' : 'Sell'} ${o.qty}`,
+      title: o.exit === 'tp' ? 'Take win' : o.exit === 'sl' ? 'Stop loss' : `${o.side === 'buy' ? 'Buy' : 'Sell'} ${units(o.qty)}`,
     })),
     ...p.alerts.filter(a => a.sym === symbol).map(a => ({ price: a.price, title: 'Alert', color: '#5c6064' })),
   ]
+  const frac = fractional(symbol), always = !!coin(symbol)
   const specs = ['Mkt. cap', 'P/E ratio', 'Dividend', '52-wk high', '52-wk low', 'Volume', 'EPS'].filter(k => info?.specs[k])
 
   return (
     <div className="stock">
       <div className="stock-main">
         <header className="title">
-          <div><h1>{name}</h1><p className="muted">{short(symbol)} · <span className={open ? 'open' : ''}>{open ? 'Market open' : 'Market closed'}</span></p></div>
+          <div><h1>{name}</h1><p className="muted">{short(symbol)} · <Term k={KIND[kindOf(symbol, quote?.kind)]?.[1] ?? 'stock'}>{KIND[kindOf(symbol, quote?.kind)]?.[0] ?? 'Stock'}</Term> · <span className={open ? 'open' : ''}>{always ? 'Open all day, every day' : open ? 'Market open' : 'Market closed'}</span></p></div>
           <span className="title-actions">
             <button className={'ghost tiny' + (watching ? ' on' : '')} aria-pressed={watching} onClick={toggleWatch}>{watching ? '★ Watching' : '☆ Watch'}</button>
             <button className="ghost tiny" onClick={() => setAlerts(true)}>Alert{p.alerts.some(a => a.sym === symbol) ? ` (${p.alerts.filter(a => a.sym === symbol).length})` : ''}</button>
           </span>
         </header>
-        <Chart symbol={symbol} live={open ? quote?.price : undefined} lines={lines} buttons={set.chartButtons && fits && open && quote ? (
+        <Chart symbol={symbol} live={open ? quote?.price : undefined} lines={lines} buttons={set.chartButtons && fits && open && quote && !frac ? (
           <div className="chart-trade">
             <button className="sell" onClick={() => quick('sell')}>Sell {qty}</button>
             <button className="buy" onClick={() => quick('buy')}>Buy {qty}</button>
@@ -336,9 +352,10 @@ export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: s
             </div>
             <Bully size={44} mood={change < 0 ? 'hmm' : 'happy'} />
           </div>
-          {pos && <p className="note holding">You {pos.qty > 0 ? 'own' : 'sold first'} {Math.abs(pos.qty)} at {money(pos.avg)}. <b className={tone((( quote?.price ?? pos.avg) - pos.avg) * pos.qty)}>{signedMoney(((quote?.price ?? pos.avg) - pos.avg) * pos.qty)}</b> so far.</p>}
+          {isIndex(symbol) && <p className="note holding">In real life you can’t buy an index itself; people buy a fund that copies it. Here you practise on the score, and 1 point costs 1 {exchange(p.exchange).currency}.</p>}
+          {pos && <p className="note holding">You {pos.qty > 0 ? 'own' : 'sold first'} {amount(symbol, Math.abs(pos.qty))} at {money(pos.avg)}. <b className={tone((( quote?.price ?? pos.avg) - pos.avg) * pos.qty)}>{signedMoney(((quote?.price ?? pos.avg) - pos.avg) * pos.qty)}</b> so far.</p>}
           {fits ? <Ticket uid={uid} p={p} symbol={symbol} price={quote?.price} open={open} qty={qty} setQty={setQty} />
-            : <p className="note">This portfolio trades on {exchange(p.exchange).name}, and this stock isn’t there. Make another portfolio to trade it.</p>}
+            : <p className="note">This portfolio trades on {exchange(p.exchange).name} in {exchange(p.exchange).currency}, and this one isn’t there. Make another portfolio to trade it.</p>}
         </section>
         <section className="card">
           <h2>Quick facts</h2>

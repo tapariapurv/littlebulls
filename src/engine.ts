@@ -18,6 +18,8 @@ export type Candle = { t: number; o: number; h: number; l: number; c: number }
 export type Prices = Record<string, number>
 type Exits = { tp?: number; sl?: number }
 
+/** Coins and indexes trade in parts of a unit; eight decimals is as fine as Bitcoin itself goes. */
+export const round8 = (n: number) => Math.round(n * 1e8) / 1e8
 export const uid = () => Math.random().toString(36).slice(2, 10)
 const short = (sym: string) => sym.replace(/\.[A-Z]+$/, '')
 
@@ -56,14 +58,14 @@ export function summary(p: Portfolio, prices: Prices) {
 }
 
 export const canAfford = (p: Portfolio, prices: Prices, sym: string, side: Side, qty: number, price: number) =>
-  Number.isInteger(qty) && qty > 0 && extra(p, sym, side, qty) * price * MARGIN <= summary(p, prices).available
+  Number.isFinite(qty) && qty > 0 && extra(p, sym, side, qty) * price * MARGIN <= summary(p, prices).available
 
 export function fill(p: Portfolio, sym: string, side: Side, qty: number, price: number, at = Date.now(), forced = false): Portfolio {
   const pos = p.positions[sym] ?? { qty: 0, avg: 0 }
   const d = signed(side, qty)
   const closing = pos.qty * d < 0 ? Math.min(Math.abs(pos.qty), qty) : 0
   const pnl = closing * (price - pos.avg) * Math.sign(pos.qty)
-  const nq = pos.qty + d
+  const nq = round8(pos.qty + d) // so selling 0.3 after buying 0.1 and 0.2 leaves exactly nothing
   const avg = closing
     ? (qty > Math.abs(pos.qty) ? price : pos.avg) // flipped sides, so the rest opens at this price
     : (pos.avg * Math.abs(pos.qty) + price * qty) / Math.abs(nq)
@@ -85,11 +87,20 @@ function withExits(p: Portfolio, sym: string, side: Side, qty: number, { tp, sl 
   return { ...p, orders: [...(tp ? [make('limit', tp, 'tp')] : []), ...(sl ? [make('stop', sl, 'sl')] : []), ...p.orders] }
 }
 
-export function marketOrder(p: Portfolio, sym: string, side: Side, qty: number, price: number, exits: Exits = {}, forced = false): Portfolio {
+/** Trades now at the market price. `type` is what was asked for: a limit or stop the price had already passed fills like this too. */
+export function marketOrder(p: Portfolio, sym: string, side: Side, qty: number, price: number, exits: Exits = {}, forced = false, type: DoneOrder['type'] = 'market'): Portfolio {
   const at = Date.now()
   const next = withExits(fill(p, sym, side, qty, price, at, forced), sym, side, qty, exits, at)
-  return record(next, { id: uid(), sym, side, qty, type: 'market', price, at }, 'filled', at)
+  return record(next, { id: uid(), sym, side, qty, type, price, at }, 'filled', at)
 }
+
+/** Whether a limit or stop can happen right now: a buy limit above the price, or a stop the price is already past. */
+export const marketable = (side: Side, type: Order['type'], limit: number, now: number) =>
+  (side === 'buy') === (type === 'limit') ? now <= limit : now >= limit
+
+/** A limit never fills worse than asked, and fills better when the price opens past it. A stop fills at its price. */
+export const fillPrice = (o: Pick<Order, 'side' | 'type' | 'price'>, c: Candle) =>
+  o.type !== 'limit' ? o.price : o.side === 'buy' ? Math.min(o.price, c.o) : Math.max(o.price, c.o)
 
 export function touched(o: Order, candles: Candle[]) {
   const wantsLow = (o.side === 'buy') === (o.type === 'limit')
@@ -99,15 +110,15 @@ export function touched(o: Order, candles: Candle[]) {
 /** Fills waiting orders the market reached, oldest first, then closes everything if the deposit has run out. Null if nothing changed. */
 export function settle(p: Portfolio, candles: Record<string, Candle[]>, prices: Prices): Portfolio | null {
   let next = p
-  const hits = p.orders.flatMap(o => { const hit = touched(o, candles[o.sym] ?? []); return hit ? [{ o, at: hit.t * 1000 }] : [] }).sort((a, b) => a.at - b.at)
-  for (const { o, at } of hits) {
+  const hits = p.orders.flatMap(o => { const hit = touched(o, candles[o.sym] ?? []); return hit ? [{ o, at: hit.t * 1000, px: fillPrice(o, hit) }] : [] }).sort((a, b) => a.at - b.at)
+  for (const { o, at, px } of hits) {
     if (!next.orders.some(x => x.id === o.id)) continue // its partner exit already fired and removed it
     const { tp, sl, ...rest } = o
     next = { ...next, orders: next.orders.filter(x => x.id !== o.id) }
     const qty = o.exit ? Math.min(o.qty, Math.abs(next.positions[o.sym]?.qty ?? 0)) : o.qty
     if (!qty) continue
-    next = withExits(fill(next, o.sym, o.side, qty, o.price, at), o.sym, o.side, qty, { tp, sl }, at)
-    next = record(next, { ...rest, qty }, 'filled', at)
+    next = withExits(fill(next, o.sym, o.side, qty, px, at), o.sym, o.side, qty, { tp, sl }, at)
+    next = record(next, { ...rest, qty, price: px }, 'filled', at)
   }
   const s = summary(next, prices)
   // ponytail: closes everything at once; TradingView's engine does too on a full margin call.
