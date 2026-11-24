@@ -7,3 +7,4 @@ __pycache__
 firebase-debug.log
 .firebase
 .DS_Store
+.claude/
