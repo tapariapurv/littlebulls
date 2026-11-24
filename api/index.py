@@ -214,6 +214,29 @@ def history(symbol: str, range: str, res: Response, before: int | None = None):
     return {"tz": c["meta"].get("gmtoffset", 0), "bars": merge(bars, k) if bars else []}
 
 
+def fetch_events(sym: str, since: int):
+    c = chart(sym, interval="1d", period1=since, period2=int(time.time()), events="div,splits")
+    e, s = c.get("events") or {}, SUBUNIT.get(c["meta"].get("currency"), 1)
+    return {"div": sorted([d["date"], d["amount"] / s] for d in (e.get("dividends") or {}).values()),
+            "split": sorted([x["date"], x["numerator"] / x["denominator"]] for x in (e.get("splits") or {}).values() if x["denominator"])}
+
+
+@app.get("/api/events")
+def events(symbols: str, since: int, res: Response):
+    """Dividends and splits since a time, so held shares get paid and split like real ones."""
+    since = max(since // 86400 * 86400, int(time.time()) - 400 * 86400)  # whole days, so everyone shares the same answers
+    syms = [check(s) for s in symbols.split(",")[:40]]
+    res.headers["Cache-Control"] = "s-maxage=3600, stale-while-revalidate=86400"
+
+    def one(sym):
+        try:
+            return sym, shared(f"ev:{sym}:{since}", 3600, lambda: fetch_events(sym, since))
+        except requests.RequestException:
+            return sym, None  # tried again next time; nothing is marked as checked
+
+    return {sym: e for sym, e in pool.map(one, syms) if e}
+
+
 @app.get("/api/search")
 def search(q: str, ex: str, res: Response):
     if ex not in EXCHANGES:

@@ -3,16 +3,19 @@
 export const MARGIN = 0.5
 export const MAX_TRADES = 3000
 export type Side = 'buy' | 'sell'
-export type Position = { qty: number; avg: number }
+export type Position = { qty: number; avg: number; at?: number } // at: when it was opened, for dividends
 export type Order = { id: string; sym: string; side: Side; qty: number; type: 'limit' | 'stop'; price: number; at: number; tp?: number; sl?: number; exit?: 'tp' | 'sl' }
 export type DoneOrder = { id: string; sym: string; side: Side; qty: number; type: 'market' | 'limit' | 'stop'; price: number; at: number; closed: number; status: 'filled' | 'cancelled'; exit?: 'tp' | 'sl' }
-export type Trade = { id: string; sym: string; side: Side; qty: number; price: number; at: number; pnl: number; forced?: boolean }
+export type Trade = { id: string; sym: string; side: Side; qty: number; price: number; at: number; pnl: number; forced?: boolean; fee?: number; div?: boolean }
 export type Alert = { id: string; sym: string; price: number; above: boolean; at: number }
 export type Watchlist = { id: string; name: string; syms: string[] }
 export type Portfolio = {
   id: string; name: string; start: number; balance: number; realized: number; createdAt: number; exchange: string
   positions: Record<string, Position>; orders: Order[]; trades: Trade[]; done: DoneOrder[]
   log: { at: number; text: string }[]; alerts: Alert[]; watchlists: Watchlist[]; rev?: string
+  fee: number // trading cost as a percent of each trade; 0 is off
+  evAt?: number // dividends and splits are counted up to here
+  game?: { code: string; ends: number; as: string } // made by joining a game; ends 0 means never, as is the name on its leaderboard
 }
 export type Candle = { t: number; o: number; h: number; l: number; c: number }
 export type Prices = Record<string, number>
@@ -23,14 +26,16 @@ export const round8 = (n: number) => Math.round(n * 1e8) / 1e8
 export const uid = () => Math.random().toString(36).slice(2, 10)
 const short = (sym: string) => sym.replace(/\.[A-Z]+$/, '')
 
-export const newPortfolio = (name: string, start: number, exchange = 'NSE'): Portfolio => ({
-  id: uid(), name, start, balance: start, realized: 0, createdAt: Date.now(), exchange, positions: {}, orders: [], trades: [],
+export const FEE = 0.1
+export const ended = (ends: number) => ends > 0 && ends <= Date.now()
+export const newPortfolio = (name: string, start: number, exchange = 'NSE', fee = FEE): Portfolio => ({
+  id: uid(), name, start, balance: start, realized: 0, createdAt: Date.now(), evAt: Date.now(), fee, exchange, positions: {}, orders: [], trades: [],
   done: [], log: [], alerts: [], watchlists: [{ id: 'main', name: 'My list', syms: [] }],
 })
 
-/** Portfolios saved before these fields existed are all NSE ones. */
+/** Portfolios saved before these fields existed are all NSE ones, and get trading costs like new ones. */
 export const hydrate = (p: Partial<Portfolio>) =>
-  ({ exchange: 'NSE', done: [], log: [], alerts: [], watchlists: [{ id: 'main', name: 'My list', syms: [] }], ...p }) as Portfolio
+  ({ exchange: 'NSE', fee: FEE, done: [], log: [], alerts: [], watchlists: [{ id: 'main', name: 'My list', syms: [] }], ...p }) as Portfolio
 
 const note = (p: Portfolio, text: string, at = Date.now()): Portfolio =>
   ({ ...p, log: [{ at, text }, ...p.log].slice(0, 200) })
@@ -57,25 +62,28 @@ export function summary(p: Portfolio, prices: Prices) {
   return { unrealized, margin, ordersMargin, equity, available: equity - margin - ordersMargin, realized: p.realized, balance: p.balance }
 }
 
+export const costOf = (p: Portfolio, qty: number, price: number) => qty * price * p.fee / 100
+
 export const canAfford = (p: Portfolio, prices: Prices, sym: string, side: Side, qty: number, price: number) =>
-  Number.isFinite(qty) && qty > 0 && extra(p, sym, side, qty) * price * MARGIN <= summary(p, prices).available
+  Number.isFinite(qty) && qty > 0 && extra(p, sym, side, qty) * price * MARGIN + costOf(p, qty, price) <= summary(p, prices).available
 
 export function fill(p: Portfolio, sym: string, side: Side, qty: number, price: number, at = Date.now(), forced = false): Portfolio {
   const pos = p.positions[sym] ?? { qty: 0, avg: 0 }
   const d = signed(side, qty)
   const closing = pos.qty * d < 0 ? Math.min(Math.abs(pos.qty), qty) : 0
   const pnl = closing * (price - pos.avg) * Math.sign(pos.qty)
+  const fee = costOf(p, qty, price)
   const nq = round8(pos.qty + d) // so selling 0.3 after buying 0.1 and 0.2 leaves exactly nothing
   const avg = closing
     ? (qty > Math.abs(pos.qty) ? price : pos.avg) // flipped sides, so the rest opens at this price
     : (pos.avg * Math.abs(pos.qty) + price * qty) / Math.abs(nq)
   const positions = { ...p.positions }
-  if (nq === 0) delete positions[sym]; else positions[sym] = { qty: nq, avg }
+  if (nq === 0) delete positions[sym]; else positions[sym] = { qty: nq, avg, at: pos.qty * nq > 0 ? pos.at : at }
   return note({
-    ...p, positions, balance: p.balance + pnl, realized: p.realized + pnl,
+    ...p, positions, balance: p.balance + pnl - fee, realized: p.realized + pnl - fee,
     orders: closing && nq * pos.qty <= 0 ? p.orders.filter(o => !(o.exit && o.sym === sym)) : p.orders, // exits go away with their position
     // A saved portfolio can't pass 1 MB in the database, so only the latest trades are kept.
-    trades: [{ id: uid(), sym, side, qty, price, at, pnl, ...(forced ? { forced } : {}) }, ...p.trades].slice(0, MAX_TRADES),
+    trades: [{ id: uid(), sym, side, qty, price, at, pnl, ...(fee ? { fee } : {}), ...(forced ? { forced } : {}) }, ...p.trades].slice(0, MAX_TRADES),
   }, `${forced ? 'Bully closed' : side === 'buy' ? 'Bought' : 'Sold'} ${qty} ${short(sym)} at ${price.toFixed(2)}`, at)
 }
 
@@ -139,9 +147,40 @@ export function cancelOrder(p: Portfolio, id: string): Portfolio {
   return note(record({ ...p, orders: p.orders.filter(x => x.id !== id) }, rest, 'cancelled'), `Cancelled the order to ${o.side} ${o.qty} ${short(o.sym)}`)
 }
 
+export type Events = Record<string, { div: [number, number][]; split: [number, number][] }>
+
+/** Pays dividends on shares held before the day they went out (a short pays them instead), and splits shares,
+ * waiting orders and alerts the way the company did. Null if nothing changed. */
+export function corporate(p: Portfolio, ev: Events, now = Date.now()): Portfolio | null {
+  if (p.evAt == null) return { ...p, evAt: now } // older portfolios start counting from today
+  const all = Object.entries(ev).flatMap(([sym, e]) => [
+    ...e.div.map(([t, v]) => ({ sym, t: t * 1000, v, split: false })), ...e.split.map(([t, v]) => ({ sym, t: t * 1000, v, split: true })),
+  ]).sort((a, b) => a.t - b.t)
+  let next = p
+  for (const { sym, t, v, split } of all) {
+    const pos = next.positions[sym]
+    if (!pos || !(v > 0) || t <= p.evAt || t <= (pos.at ?? 0) || t > now) continue
+    if (split) {
+      const k = (x?: number) => x && x / v
+      next = note({
+        ...next, positions: { ...next.positions, [sym]: { ...pos, qty: round8(pos.qty * v), avg: pos.avg / v } },
+        orders: next.orders.map(o => o.sym === sym ? { ...o, qty: round8(o.qty * v), price: o.price / v, tp: k(o.tp), sl: k(o.sl) } : o),
+        alerts: next.alerts.map(a => a.sym === sym ? { ...a, price: a.price / v } : a),
+      }, `${short(sym)} split: every share became ${+v.toFixed(4)}`, t)
+    } else {
+      const cash = pos.qty * v
+      next = note({
+        ...next, balance: next.balance + cash, realized: next.realized + cash,
+        trades: [{ id: uid(), sym, side: (pos.qty > 0 ? 'buy' : 'sell') as Side, qty: Math.abs(pos.qty), price: v, at: t, pnl: cash, div: true }, ...next.trades].slice(0, MAX_TRADES),
+      }, `${short(sym)} ${cash > 0 ? 'paid you' : 'cost you'} ${Math.abs(cash).toFixed(2)} in dividends`, t)
+    }
+  }
+  return next === p ? null : { ...next, evAt: now }
+}
+
 /** Starts the same portfolio again from zero; watchlists stay. */
 export const resetPortfolio = (p: Portfolio, start = p.start): Portfolio =>
-  note({ ...newPortfolio(p.name, start, p.exchange), id: p.id, createdAt: p.createdAt, watchlists: p.watchlists }, `Started fresh with ${start.toFixed(2)}`)
+  note({ ...newPortfolio(p.name, start, p.exchange, p.fee), game: p.game, id: p.id, createdAt: p.createdAt, watchlists: p.watchlists }, `Started fresh with ${start.toFixed(2)}`)
 
 export const addAlert = (p: Portfolio, sym: string, price: number, now: number): Portfolio =>
   note({ ...p, alerts: [...p.alerts, { id: uid(), sym, price, above: price > now, at: Date.now() }] }, `Set an alert for ${short(sym)} at ${price.toFixed(2)}`)
@@ -153,11 +192,16 @@ export const clearAlerts = (p: Portfolio, fired: Alert[]): Portfolio =>
 /** What the balance was after each finished trade, newest first. */
 export function balanceHistory(p: Portfolio) {
   let balance = p.balance // counted back from now, so it stays right after the oldest trades are dropped
-  return p.trades.filter(t => t.pnl).map(t => { const row = { at: t.at, sym: t.sym, change: t.pnl, balance }; balance -= t.pnl; return row })
+  return p.trades.filter(t => t.pnl || t.fee).map(t => {
+    const change = t.pnl - (t.fee ?? 0), row = { at: t.at, sym: t.sym, change, balance, div: t.div, fee: t.fee }
+    balance -= change
+    return row
+  })
 }
 
 export function analytics(p: Portfolio) {
-  const closed = [...p.trades].reverse().filter(t => t.pnl)
+  const closed = [...p.trades].reverse().filter(t => t.pnl && !t.div)
+  const fees = p.trades.reduce((s, t) => s + (t.fee ?? 0), 0), dividends = p.trades.reduce((s, t) => s + (t.div ? t.pnl : 0), 0)
   const wins = closed.filter(t => t.pnl > 0), losses = closed.filter(t => t.pnl < 0)
   const won = wins.reduce((s, t) => s + t.pnl, 0), lost = -losses.reduce((s, t) => s + t.pnl, 0)
   let v = 0, peak = 0, trough = 0, drawdown = 0, runup = 0
@@ -174,6 +218,6 @@ export function analytics(p: Portfolio) {
     profitFactor: lost ? won / lost : null, expectancy: closed.length ? v / closed.length : 0,
     avgWin: wins.length ? won / wins.length : 0, avgLoss: losses.length ? lost / losses.length : 0,
     best: Math.max(0, ...closed.map(t => t.pnl)), worst: Math.min(0, ...closed.map(t => t.pnl)),
-    drawdown, runup, curve, byStock: Object.entries(by).sort((a, b) => b[1] - a[1]),
+    drawdown, runup, curve, fees, dividends, byStock: Object.entries(by).sort((a, b) => b[1] - a[1]),
   }
 }

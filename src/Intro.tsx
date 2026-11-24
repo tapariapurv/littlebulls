@@ -19,6 +19,8 @@ const FEATURES: [string, string][] = [
   ['Twice your money, with a safety net', 'Trade up to 2× your cash with a deposit. If losses eat half of it, Bully closes the trades so you never owe anything.'],
   ['Research that makes sense', 'News, quick facts, research lists of climbers and drops, and what 1,000 from a year ago would be worth today.'],
   ['Watchlists and alerts', 'Keep an eye on favourites and get a ping when a price is reached.'],
+  ['Games with your class or family', 'Host a game, share its six-letter code, and everyone trades the same pretend money on the same market. A live leaderboard shows who’s ahead.'],
+  ['Dividends, splits and costs', 'Shares you own pay their real dividends and split when the company splits. Each trade costs 0.1%, like a real broker, and that can be turned off.'],
   ['Scores to learn from', 'Win rate, profit factor, biggest drop and a full history of every trade you have made.'],
   ['Plain words', 'Every tricky word has a dotted line. Tap it and Bully explains it, with the grown-up name underneath.'],
 ]
@@ -28,6 +30,7 @@ const PROS = [
   `Real prices from ${EXCHANGES.length} exchanges around the world, in their own currencies.`,
   'Five kinds of things to trade, not just stocks.',
   'Several portfolios, so different ideas can be tried side by side.',
+  'Games with a live leaderboard for a class, a club or a family.',
   'Works on phones, tablets and computers, and can be added to the home screen.',
 ]
 const CONS = [
@@ -35,7 +38,8 @@ const CONS = [
   'Bonds are traded through bond funds; single bonds have no free prices.',
   'Real people can’t buy an index itself. Here you practise on the score, at 1 point for 1 unit of money.',
   `Crypto is priced only in ${CRYPTO_CCYS.join(', ')}.`,
-  'No fees, taxes or slippage, so real trading would cost a little more.',
+  'Trading costs are one simple percent. Real trading also has taxes and slippage, and costs vary by broker.',
+  'Game scores are worked out from what each player reports, so a game is for learning, not for prizes.',
   'Alerts ring only while LittleBulls is open. Waiting orders are filled from price history when you come back.',
 ]
 
@@ -44,6 +48,7 @@ const FAQ: [string, string][] = [
   ['How much does it cost?', 'Nothing. LittleBulls is free.'],
   ['Does it give stock tips?', 'No. It is a place to practise and learn, not financial advice. What a price did before can’t promise what it will do next.'],
   ['What do you save?', 'A nickname, an email address and the portfolios your child makes, so they are there on any device.'],
+  ['Can a class play together?', 'Yes. A teacher or parent hosts a game in Games, picks the market, the money and how long it runs, and shares the code. Players only see each other’s nicknames and scores.'],
   ['What does a child need to start?', 'A nickname and an email address, or a Google account. We suggest a parent helps set it up.'],
 ]
 

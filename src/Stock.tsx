@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { CandlestickSeries, LineSeries, createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts'
 import { AnimatePresence, motion } from 'motion/react'
 import { askToNotify, blip, candles, getSettings, mutate, nameOf, older, setSetting, stockInfo, useQuotes, useSettings, zoneOf, type Info } from './data'
-import { MARGIN, addAlert, addOrder, canAfford, marketOrder, marketable, summary, type Candle, type Portfolio, type Side } from './engine'
+import { MARGIN, addAlert, addOrder, canAfford, costOf, ended, marketOrder, marketable, summary, type Candle, type Portfolio, type Side } from './engine'
 import { KIND, SPEC_WORDS, amount, coin, exchange, fractional, isIndex, kindOf, matches, short, units } from './markets'
 import { Bully, Modal, Num, Tabs, Term, Tick, decimal, money, signedMoney, spring, tone, useToast } from './ui'
 
@@ -165,6 +165,7 @@ function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: 
   const word = side === 'buy' ? 'Buy' : 'Sell'
   const shares = amount(symbol, n)
   const pickSide = (x: Side) => { setSide(x); setAll(false) }
+  const over = !!p.game && ended(p.game.ends)
 
   async function place() {
     if (!ready) { setShake(n => n + 1); return }
@@ -185,6 +186,7 @@ function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: 
     else toast({ title: 'Order is waiting', body: `${word} ${shares} when the price reaches ${money(at)}.` })
   }
 
+  if (over) return <div className="ticket"><p className="note">This game has ended, so its scores are final. Make a new portfolio or join another game to keep trading.</p></div>
   return (
     <div className="ticket">
       <div className={'seg ' + side} role="tablist">
@@ -227,6 +229,7 @@ function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: 
       {badExit && <p className="note bad">{side === 'buy' ? 'When buying, your win goes above the price and your stop goes below it.' : 'When selling first, your win goes below the price and your stop goes above it.'}</p>}
       <dl className="rows">
         <div><dt><Term k="margin">Deposit needed</Term></dt><dd className="num">{at ? money(deposit) : '—'}</dd></div>
+        {p.fee > 0 && <div><dt><Term k="fee">Trading cost</Term></dt><dd className="num">{at && n ? money(costOf(p, n, at)) : '—'}</dd></div>}
         <div><dt><Term k="available">Free</Term></dt><dd className="num"><Num value={s.available} /></dd></div>
       </dl>
       <AnimatePresence initial={false}>

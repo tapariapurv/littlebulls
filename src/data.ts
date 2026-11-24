@@ -1,9 +1,9 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { initializeApp } from 'firebase/app'
 import { getAuth } from 'firebase/auth'
-import { collection, deleteDoc, doc, initializeFirestore, onSnapshot, runTransaction, setDoc } from 'firebase/firestore'
-import { hydrate, uid as newId, type Candle, type Portfolio } from './engine'
-import { short } from './markets'
+import { collection, deleteDoc, doc, getDoc, initializeFirestore, onSnapshot, query, runTransaction, setDoc, where } from 'firebase/firestore'
+import { hydrate, uid as newId, type Candle, type Events, type Portfolio, type Position } from './engine'
+import { fractional, short } from './markets'
 
 // Firebase web config is public by design; firestore.rules is what protects the data.
 const app = initializeApp({
@@ -122,6 +122,37 @@ export const candles = (symbol: string, range: string) => history(historyPath(sy
 export const older = (symbol: string, range: string, before: number) => history(`${historyPath(symbol, range)}&before=${before}`, symbol, 3600000)
 /** Charts draw timestamps as UTC, so they get shifted to the exchange's own clock. */
 export const zoneOf = (symbol: string) => zones[symbol] ?? 0
+
+/** Dividends and splits for the held shares since the portfolio last counted them. Null unless every symbol answered. */
+export async function events(p: Portfolio): Promise<Events | null> {
+  const syms = Object.keys(p.positions).filter(s => !fractional(s)).slice(0, 40)
+  if (!syms.length || p.evAt == null) return syms.length ? {} : null
+  const day = Math.floor(p.evAt / 86400000) * 86400 // a whole day, so an hour's checks reuse one answer
+  const ev = await cached<Events>(`events?symbols=${encodeURIComponent(syms.join(','))}&since=${day}`, 3600000)
+  return syms.every(s => ev[s]) ? ev : null
+}
+
+/** A game everyone joins with its code: the same money, market and costs, and one leaderboard. */
+export type Game = { code: string; name: string; host: string; hostName: string; start: number; exchange: string; fee: number; ends: number; createdAt: number }
+export type Player = { name: string; start: number; balance: number; positions: Record<string, Position>; at: number }
+const CODE = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789' // no 0/O or 1/I/L to mix up when reading it off a board
+export const newCode = () => Array.from(crypto.getRandomValues(new Uint32Array(6)), n => CODE[n % CODE.length]).join('')
+export const createGame = (g: Game) => setDoc(doc(db, 'games', g.code), g)
+export const deleteGame = (code: string) => deleteDoc(doc(db, 'games', code))
+export const getGame = (code: string) => getDoc(doc(db, 'games', code)).then(s => s.exists() ? s.data() as Game : null)
+export const savePlayer = (code: string, uid: string, x: Player) => setDoc(doc(db, 'games', code, 'players', uid), x)
+export const removePlayer = (code: string, uid: string) => deleteDoc(doc(db, 'games', code, 'players', uid))
+
+function useLive<T>(listen: (set: (v: T) => void) => () => void, key: string) {
+  const [v, setV] = useState<T | null>(null)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(() => { setV(null); return listen(setV) }, [key])
+  return v
+}
+export const usePlayers = (code: string) => useLive<(Player & { uid: string })[]>(set =>
+  onSnapshot(collection(db, 'games', code, 'players'), s => set(s.docs.map(d => ({ ...d.data() as Player, uid: d.id }))), () => set([])), code)
+export const useHosted = (uid: string) => useLive<Game[]>(set =>
+  onSnapshot(query(collection(db, 'games'), where('host', '==', uid)), s => set(s.docs.map(d => d.data() as Game).sort((a, b) => b.createdAt - a.createdAt)), () => set([])), uid)
 
 export type Info = { name: string; specs: Record<string, string>; news: { source: string; when: string; url: string; title: string }[] }
 export const stockInfo = (symbol: string) => cached<Info>('stock?symbol=' + encodeURIComponent(symbol), 600000)

@@ -241,3 +241,13 @@ form select { display: block; width: 100%; height: 44px; margin-top: 4px; paddin
 .tour-list { padding-left: 18px; display: grid; gap: 8px }
 .tour-nav { display: flex; gap: 10px; align-items: center; justify-content: flex-end; margin-top: 8px } .tour-nav .ghost.tiny { margin-right: auto; height: 42px }
 .modal > .link { justify-self: center }
+
+/* Games */
+.games form { max-width: 460px }
+.code { font-family: ui-monospace, Menlo, monospace; letter-spacing: .12em; font-weight: 700 }
+input.code { text-transform: uppercase; font-size: 20px }
+.code.big { display: block; font-size: 40px; color: var(--accent-ink); margin: 6px 0 12px }
+.board td:first-child { width: 36px } .board small { display: block; color: var(--muted); font-weight: 500 }
+.board .me-row td { background: var(--raised) }
+.plain li.hosted { flex-wrap: wrap } .hosted > div:first-child { flex: 1; min-width: 200px } .hosted small { display: block; color: var(--muted) } .hosted .scroll { flex-basis: 100% }
+.toggle select { flex: none; height: 36px; padding: 0 8px; background: var(--surface); border: 1px solid var(--control); border-radius: var(--r-control); font-weight: 600 }

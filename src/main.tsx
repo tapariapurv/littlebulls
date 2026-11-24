@@ -5,9 +5,10 @@ import {
   GoogleAuthProvider, createUserWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEmail,
   signInWithEmailAndPassword, signInWithPopup, updateProfile, type User,
 } from 'firebase/auth'
-import { api, auth, blip, candles, mutate, nameOf, notify, savePortfolio, useQuotes, usePortfolios, useSettings } from './data'
-import { cancelOrder, clearAlerts, firedAlerts, marketOrder, newPortfolio, settle, summary, type Portfolio } from './engine'
-import { EXCHANGES, exchange, short, units } from './markets'
+import { api, auth, blip, candles, events, mutate, nameOf, notify, savePlayer, savePortfolio, useQuotes, usePortfolios, useSettings } from './data'
+import { cancelOrder, clearAlerts, corporate, ended, firedAlerts, marketOrder, newPortfolio, settle, summary, type Portfolio } from './engine'
+import { exchange, short, units } from './markets'
+import { Games, StartFields } from './Games'
 import { Markets } from './Browse'
 import { Landing, Tour } from './Intro'
 import { Analytics, History, Icon, SettingsPage, Watchlist } from './More'
@@ -87,9 +88,6 @@ function NewPortfolio({ uid, onDone, onClose, first }: { uid: string; onDone: (i
   const [name, setName] = useState(first ? 'My first portfolio' : '')
   const [amount, setAmount] = useState(100000)
   const [ex, setEx] = useState('NSE')
-  const m = exchange(ex)
-  const big = { JPY: 10, KRW: 100, IDR: 1000 }[m.currency] ?? 1 // so the chips mean roughly the same in every currency
-  const fmt = new Intl.NumberFormat(m.locale, { style: 'currency', currency: m.currency, maximumFractionDigits: 0 })
   const busy = useRef(false) // a ref because a double click can land before React redraws, and would make two portfolios
   const toast = useToast()
   function submit(e: FormEvent) {
@@ -107,20 +105,7 @@ function NewPortfolio({ uid, onDone, onClose, first }: { uid: string; onDone: (i
       <p className="muted">A portfolio is your collection of trades. Try different ideas in different ones.</p>
       <form onSubmit={submit}>
         <label>Name it<input required maxLength={30} value={name} onChange={e => setName(e.target.value)} /></label>
-        <label>Stock exchange
-          <select value={ex} onChange={e => setEx(e.target.value)}>
-            {[...new Set(EXCHANGES.map(x => x.region))].map(r => <optgroup key={r} label={r}>
-              {EXCHANGES.filter(x => x.region === r).map(x => <option key={x.id} value={x.id}>{x.name} ({x.currency})</option>)}
-            </optgroup>)}
-          </select>
-          <small>This portfolio can only trade here, in {m.currency}. Make another portfolio to try a different exchange.</small>
-        </label>
-        <label>Pretend money to start with
-          <input required inputMode="numeric" value={amount ? amount.toLocaleString(m.locale) : ''} onChange={e => setAmount(Math.min(1e9, Number(e.target.value.replace(/\D/g, ''))))} />
-        </label>
-        <div className="chips">{[10000, 100000, 1000000].map(x => x * big).map(a => (
-          <button type="button" key={a} className={amount === a ? 'on' : ''} onClick={() => setAmount(a)}>{fmt.format(a)}</button>
-        ))}</div>
+        <StartFields ex={ex} setEx={setEx} amount={amount} setAmount={setAmount} what="This portfolio" />
         <motion.button className="primary buy" disabled={!amount} whileTap={{ scale: 0.97 }}>Create portfolio</motion.button>
       </form>
     </Modal>
@@ -183,7 +168,7 @@ function Home({ uid, p }: { uid: string; p: Portfolio }) {
                 <td className="r num">{units(Math.abs(pos.qty))}</td><td className="r num">{money(pos.avg)}</td>
                 <td className="r">{px ? <Tick value={px} /> : '—'}</td>
                 <td className={'r num ' + tone(pl ?? 0)}>{pl === null ? '—' : signedMoney(pl)}</td>
-                <td className="r"><button className="ghost tiny" disabled={!q.bySym[sym]?.open || !px} title={q.bySym[sym]?.open ? '' : 'The market is closed'} onClick={() => close(sym)}>Close</button></td>
+                <td className="r"><button className="ghost tiny" disabled={!q.bySym[sym]?.open || !px || ended(p.game?.ends ?? 0)} title={q.bySym[sym]?.open ? '' : 'The market is closed'} onClick={() => close(sym)}>Close</button></td>
               </motion.tr>
             })}</AnimatePresence></tbody></table></div>
         ) : <Empty text="Nothing here yet. Find a stock you know, like the company behind your favourite biscuits." />)}
@@ -217,7 +202,8 @@ function useSettler(uid: string, p: Portfolio | undefined) {
       const orderSyms = [...new Set(now.orders.map(o => o.sym))]
       const syms = [...new Set([...orderSyms, ...Object.keys(now.positions), ...now.alerts.map(a => a.sym)])]
       const oldest = (s: string) => Math.min(...now.orders.filter(o => o.sym === s).map(o => o.at))
-      const [hist, quotes] = await Promise.all([
+      const [ev, hist, quotes] = await Promise.all([
+        events(now).catch(() => null),
         Promise.all(orderSyms.map(async s => {
           const recent = await candles(s, 'orders') // small candles only go back a few days, so older orders also check daily ones
           return Date.now() - oldest(s) < 4 * 86400000 ? recent : [...await candles(s, '6M'), ...recent].sort((a, b) => a.t - b.t)
@@ -227,15 +213,17 @@ function useSettler(uid: string, p: Portfolio | undefined) {
       wait = quotes.open ? 0 : Date.now() + 300000
       const byS = Object.fromEntries(orderSyms.map((s, i) => [s, hist[i]]))
       const prices = Object.fromEntries(quotes.quotes.map(x => [x.symbol, x.price]))
+      // Splits come first, so waiting orders are compared with prices in today's share sizes.
       const change = (c: Portfolio) => {
-        const next = settle(c, byS, prices), hits = firedAlerts(next ?? c, prices)
-        return { next: hits.length ? clearAlerts(next ?? c, hits) : next, settled: next, hits }
+        const acted = ev ? corporate(c, ev) : null, base = acted ?? c
+        const settled = settle(base, byS, prices), hits = firedAlerts(settled ?? base, prices)
+        return { next: hits.length ? clearAlerts(settled ?? base, hits) : settled ?? acted, settled, hits, base, paid: base.trades.slice(0, base.trades.length - c.trades.length).reduce((s, t) => s + (t.div ? t.pnl : 0), 0) }
       }
       if (!change(now).next) return // nothing happened, which is nearly always, so no database read is spent finding that out
-      let before = 0, after = 0, forced = false, fired: Portfolio['alerts'] = []
+      let before = 0, after = 0, forced = false, fired: Portfolio['alerts'] = [], paid = 0
       await mutate(uid, now.id, c => {
-        const { next, settled, hits } = change(c)
-        before = c.trades.length; after = settled?.trades.length ?? before; forced = !!settled?.trades[0]?.forced; fired = hits
+        const { next, settled, hits, base, paid: got } = change(c)
+        before = base.trades.length; after = settled?.trades.length ?? before; forced = !!settled?.trades[0]?.forced; fired = hits; paid = got
         return next
       }, false)
       for (const a of fired) {
@@ -244,6 +232,9 @@ function useSettler(uid: string, p: Portfolio | undefined) {
         blip()
         notify('LittleBulls alert', body)
       }
+      if (paid) toast(paid > 0
+        ? { title: 'You got dividends', body: `Companies you own paid you ${money(paid)} as a thank-you for owning their shares.`, mood: 'wow' }
+        : { title: 'You paid dividends', body: `You sold shares you don’t own, so you paid their owners ${money(-paid)}.`, mood: 'hmm' })
       if (after > before) notify('LittleBulls', forced ? 'Bully closed your trades to protect your money.' : 'A waiting order happened.')
       if (after > before) blip()
       if (forced) toast({ title: 'Bully closed your trades', body: 'Losses ate half your deposit, so your trades were closed to protect your money.', mood: 'hmm' })
@@ -256,7 +247,7 @@ function useSettler(uid: string, p: Portfolio | undefined) {
   }, [uid, key])
 }
 
-const NAV = [['home', 'My money'], ['stocks', 'Markets'], ['watchlist', 'Watchlist'], ['discover', 'Discover'], ['analytics', 'Analytics'], ['history', 'History'], ['settings', 'Settings']]
+const NAV = [['home', 'My money'], ['stocks', 'Markets'], ['watchlist', 'Watchlist'], ['discover', 'Discover'], ['games', 'Games'], ['analytics', 'Analytics'], ['history', 'History'], ['settings', 'Settings']]
 
 function Shell({ user }: { user: User }) {
   const hash = useHash()
@@ -274,6 +265,14 @@ function Shell({ user }: { user: User }) {
     if (make && list?.length) setAdding(true) // with no portfolio yet, the new-portfolio form opens by itself
   }
   useSettler(user.uid, p)
+  // A game's leaderboard works out everyone's worth from what they hold, so holdings go to the game whenever they change.
+  const hold = p?.game && !ended(p.game.ends) ? JSON.stringify([p.balance, p.positions]) : ''
+  useEffect(() => {
+    if (!p?.game || !hold) return
+    const t = setTimeout(() => savePlayer(p.game!.code, user.uid, { name: p.game!.as, start: p.start, balance: p.balance, positions: p.positions, at: Date.now() }).catch(() => {}), 1000)
+    return () => clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hold, p?.id])
   const stockSym = hash.startsWith('#/stock/') ? decodeURIComponent(hash.slice(8)) : ''
   const route = stockSym ? 'stock' : NAV.some(([id]) => id === hash.slice(2)) ? hash.slice(2) : 'home'
   useEffect(() => { loadStock().catch(() => {}) }, [])
@@ -309,6 +308,7 @@ function Shell({ user }: { user: User }) {
             {route === 'analytics' && <Analytics p={p} />}
             {route === 'history' && <History p={p} />}
             {route === 'settings' && <SettingsPage user={user} p={p} />}
+            {route === 'games' && <Games user={user} p={p} list={list} pick={pick} />}
             <Suspense fallback={<div className="boot"><Bully size={72} /></div>}>
               {route === 'discover' && <Discover key={p.exchange} ex={p.exchange} />}
               {route === 'stock' && <Stock key={stockSym + p.id} uid={user.uid} p={p} symbol={stockSym} />}

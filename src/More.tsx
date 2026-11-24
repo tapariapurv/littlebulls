@@ -1,7 +1,7 @@
 import { Suspense, lazy, useEffect, useState, type FormEvent } from 'react'
 import { sendPasswordResetEmail, signOut, updateProfile, type User } from 'firebase/auth'
-import { askToNotify, auth, deletePortfolio, mutate, nameOf, preload, remember, setSetting, useQuotes, useSearch, useSettings } from './data'
-import { analytics, balanceHistory, resetPortfolio, uid as newId, type Portfolio } from './engine'
+import { askToNotify, auth, deletePortfolio, mutate, nameOf, preload, remember, removePlayer, setSetting, useQuotes, useSearch, useSettings } from './data'
+import { FEE, analytics, balanceHistory, resetPortfolio, uid as newId, type Portfolio } from './engine'
 import { exchange, short, units } from './markets'
 import { Empty, Tabs, Term, Tick, money, signedMoney, tone, useToast } from './ui'
 
@@ -13,6 +13,7 @@ const ICONS: Record<string, string> = {
   analytics: 'M5 20v-7M12 20V5M19 20v-11',
   history: 'M4 12a8 8 0 108-8 8 8 0 00-6 2.7L4 9M4 4v5h5M12 8v4l3 2',
   settings: 'M4 7h10M18 7h2M4 17h2M10 17h10M14 4.5v5h4v-5zM6 14.5v5h4v-5z',
+  games: 'M8 4h8v5a4 4 0 01-8 0zM8 6H5a3 3 0 003 4M16 6h3a3 3 0 01-3 4M12 13v4M8 20h8M10 17h4',
 }
 export const Icon = ({ name }: { name: string }) => (
   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d={ICONS[name]} /></svg>
@@ -81,11 +82,13 @@ export function Analytics({ p }: { p: Portfolio }) {
     ['', 'Average win', money(a.avgWin), `Best ${money(a.best)}`],
     ['', 'Average loss', money(a.avgLoss), `Worst ${money(Math.abs(a.worst))}`],
     ['drawdown', 'Toughest stretch', money(a.drawdown), `Best stretch ${money(a.runup)}`],
+    ['fee', 'Trading costs paid', money(a.fees), p.fee ? `${p.fee}% of every trade` : 'Costs are off'],
+    ['dividend', 'Dividends', signedMoney(a.dividends), 'Paid to you while you owned shares'],
   ]
   return (
     <div className="stocks">
       <header className="title"><div><h1>Analytics</h1><p className="muted">How your finished trades in {p.name} have gone.</p></div></header>
-      {!a.count ? <section className="card"><Empty text="Finish a trade and Bully will start working out how you’re doing." /></section> : <>
+      {!a.count && !a.fees && !a.dividends ? <section className="card"><Empty text="Finish a trade and Bully will start working out how you’re doing." /></section> : <>
         <section className="card">
           <h2>Wins and losses added up <b className={'num ' + tone(a.total)}>{signedMoney(a.total)}</b></h2>
           <Suspense fallback={<div className="curve" />}><Curve points={a.curve} /></Suspense>
@@ -125,7 +128,7 @@ export function History({ p }: { p: Portfolio }) {
           <div className="scroll"><table><thead><tr><th>Stock</th><th>What happened</th><th className="r">Price</th><th className="r"><Term k="realized" end>Locked in</Term></th><th className="r">When</th></tr></thead><tbody>
             {p.trades.slice(0, 200).map(t => <tr key={t.id}>
               <td><a href={'#/stock/' + t.sym}><b>{nameOf(t.sym)}</b></a></td>
-              <td>{t.forced ? 'Bully closed ' : t.side === 'buy' ? 'Bought ' : 'Sold '}{units(t.qty)}{t.forced && <small>Losses ate half the deposit</small>}</td>
+              <td>{t.div ? `Dividend on ${units(t.qty)}` : <>{t.forced ? 'Bully closed ' : t.side === 'buy' ? 'Bought ' : 'Sold '}{units(t.qty)}</>}{t.forced && <small>Losses ate half the deposit</small>}{t.fee ? <small>Cost {money(t.fee)}</small> : null}</td>
               <td className="r num">{money(t.price)}</td>
               <td className={'r num ' + tone(t.pnl)}>{t.pnl ? signedMoney(t.pnl) : '—'}</td>
               <td className="r muted">{time(t.at)}</td>
@@ -133,7 +136,7 @@ export function History({ p }: { p: Portfolio }) {
         ) : <Empty text="Your trades will show up here." />)}
         {tab === 'money' && (balances.length ? (
           <div className="scroll"><table><thead><tr><th>From</th><th className="r">Change</th><th className="r"><Term k="balance" end>Your money</Term></th><th className="r">When</th></tr></thead><tbody>
-            {balances.map((b, i) => <tr key={i}><td>{nameOf(b.sym)}</td><td className={'r num ' + tone(b.change)}>{signedMoney(b.change)}</td><td className="r num">{money(b.balance)}</td><td className="r muted">{time(b.at)}</td></tr>)}
+            {balances.map((b, i) => <tr key={i}><td>{nameOf(b.sym)}{b.div ? <small>Dividend</small> : b.fee ? <small>Includes a {money(b.fee)} cost</small> : null}</td><td className={'r num ' + tone(b.change)}>{signedMoney(b.change)}</td><td className="r num">{money(b.balance)}</td><td className="r muted">{time(b.at)}</td></tr>)}
           </tbody></table></div>
         ) : <Empty text={`You started with ${money(p.start)}. It changes when you finish a trade.`} />)}
         {tab === 'log' && (p.log.length ? <ul className="plain">{p.log.map((l, i) => <li key={i}><span>{l.text}</span><small>{time(l.at)}</small></li>)}</ul>
@@ -182,6 +185,11 @@ export function SettingsPage({ user, p }: { user: User; p: Portfolio }) {
         <form className="inline-form" onSubmit={e => { e.preventDefault(); mutate(user.uid, p.id, c => ({ ...c, name: name.trim() })).then(() => toast({ title: 'Renamed', body: name.trim() })) }}>
           <input required aria-label="Portfolio name" maxLength={30} value={name} onChange={e => setName(e.target.value)} /><button className="ghost tiny">Rename</button>
         </form>
+        {p.game ? <p className="muted">Part of a game, code <b className="code">{p.game.code}</b>. Every player has the same money, market and costs, so it can’t be started again or changed.</p> : <>
+        <label className="toggle"><span>Trading costs<small>Real brokers charge for every trade. Off makes trading free, which real trading never is.</small></span>
+          <select aria-label="Cost of each trade" value={p.fee} onChange={e => { const fee = Number(e.target.value); mutate(user.uid, p.id, c => ({ ...c, fee })) }}>
+            {[...new Set([0, 0.05, FEE, 0.25, 0.5, 1, p.fee])].sort((a, b) => a - b).map(f => <option key={f} value={f}>{f ? `${f}% a trade` : 'Off'}</option>)}
+          </select></label>
         <form className="inline-form" onSubmit={e => {
           e.preventDefault()
           if (confirm(`Start ${p.name} again with ${money(start)}? All its trades, orders and alerts will be gone.`))
@@ -189,8 +197,12 @@ export function SettingsPage({ user, p }: { user: User; p: Portfolio }) {
         }}>
           <input aria-label="Money to start again with" inputMode="numeric" value={start || ''} onChange={e => setStart(Math.min(1e9, Number(e.target.value.replace(/\D/g, ''))))} />
           <button className="ghost tiny" disabled={!start}>Start again</button>
-        </form>
-        <button className="ghost tiny danger" onClick={() => { if (confirm(`Delete ${p.name} for good? This can’t be undone.`)) deletePortfolio(user.uid, p.id) }}>Delete this portfolio</button>
+        </form></>}
+        <button className="ghost tiny danger" onClick={() => {
+          if (!confirm(`Delete ${p.name} for good?${p.game ? ' You’ll also leave its game.' : ''} This can’t be undone.`)) return
+          if (p.game) removePlayer(p.game.code, user.uid).catch(() => {}) // a game that's over or gone keeps its board as it was
+          deletePortfolio(user.uid, p.id)
+        }}>{p.game ? 'Leave the game and delete this portfolio' : 'Delete this portfolio'}</button>
       </section>
       <section className="card">
         <h2>App</h2>
