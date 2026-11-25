@@ -45,7 +45,7 @@ const record = (p: Portfolio, o: Omit<DoneOrder, 'closed' | 'status'>, status: D
 const signed = (side: Side, qty: number) => (side === 'buy' ? qty : -qty)
 
 /** Shares of new exposure an order adds; closing a position needs no deposit. */
-const extra = (p: Portfolio, sym: string, side: Side, qty: number) => {
+export const extra = (p: Portfolio, sym: string, side: Side, qty: number) => {
   const q = p.positions[sym]?.qty ?? 0
   return Math.max(0, Math.abs(q + signed(side, qty)) - Math.abs(q))
 }

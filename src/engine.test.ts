@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { MAX_TRADES, addOrder, canAfford, fill, newPortfolio, settle, summary, touched, type Portfolio } from './engine.ts'
+import { MAX_TRADES, addOrder, canAfford, extra, fill, newPortfolio, settle, summary, touched, type Portfolio } from './engine.ts'
 
 let p = newPortfolio('t', 1000, 'NSE', 0)
 assert(canAfford(p, {}, 'A', 'buy', 20, 100), '2x borrowing lets 1000 buy 2000 of stock')
@@ -9,6 +9,7 @@ p = fill(p, 'A', 'buy', 10, 120)
 assert.equal(p.positions.A.avg, 110)
 let s = summary(p, { A: 130 })
 assert.equal(s.unrealized, 400); assert.equal(s.equity, 1400); assert.equal(s.margin, 1300); assert.equal(s.available, 100)
+assert.equal(extra(p, 'A', 'sell', 20), 0, 'selling what you hold needs no deposit'); assert.equal(extra(p, 'A', 'sell', 45), 5, 'only a short bigger than the trade you had does')
 p = fill(p, 'A', 'sell', 5, 130)
 assert.equal(p.realized, 100); assert.equal(p.balance, 1100); assert.equal(p.positions.A.qty, 15)
 p = fill(p, 'A', 'sell', 20, 100) // flips short: closes 15 at -10, opens 5 short at 100

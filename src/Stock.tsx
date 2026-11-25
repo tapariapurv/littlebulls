@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { CandlestickSeries, LineSeries, createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts'
 import { AnimatePresence, motion } from 'motion/react'
 import { askToNotify, blip, candles, getSettings, mutate, nameOf, older, setSetting, stockInfo, useQuotes, useSettings, zoneOf, type Info } from './data'
-import { MARGIN, addAlert, addOrder, canAfford, costOf, ended, marketOrder, marketable, summary, type Candle, type Portfolio, type Side } from './engine'
+import { MARGIN, addAlert, addOrder, canAfford, costOf, ended, extra, marketOrder, marketable, summary, type Candle, type Portfolio, type Side } from './engine'
 import { KIND, SPEC_WORDS, amount, coin, exchange, fractional, isIndex, kindOf, matches, short, units } from './markets'
 import { Bully, Modal, Num, Tabs, Term, Tick, decimal, money, signedMoney, spring, tone, useToast } from './ui'
 
@@ -157,7 +157,7 @@ function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: 
   const n = all ? Math.abs(held) : frac ? (at ? Math.floor(Number(cash) / at * 1e8) / 1e8 : 0) : qty
   const isShort = side === 'sell' && n > Math.max(held, 0)
   const afford = canAfford(p, prices, symbol, side, n, at)
-  const deposit = n * at * MARGIN
+  const deposit = extra(p, symbol, side, n) * at * MARGIN // closing what you hold needs none
   const tp = exits ? Number(tpText) || undefined : undefined, sl = exits ? Number(slText) || undefined : undefined
   const up = side === 'buy' ? 1 : -1 // a take-win sits past your price in the winning direction, a stop on the other side
   const badExit = at > 0 && ((tp && (tp - at) * up <= 0) || (sl && (sl - at) * up >= 0))
