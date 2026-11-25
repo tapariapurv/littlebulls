@@ -136,7 +136,7 @@ export function History({ p }: { p: Portfolio }) {
         ) : <Empty text="Your trades will show up here." />)}
         {tab === 'money' && (balances.length ? (
           <div className="scroll"><table><thead><tr><th>From</th><th className="r">Change</th><th className="r"><Term k="balance" end>Your money</Term></th><th className="r">When</th></tr></thead><tbody>
-            {balances.map((b, i) => <tr key={i}><td>{nameOf(b.sym)}{b.div ? <small>Dividend</small> : b.fee ? <small>Includes a {money(b.fee)} cost</small> : null}</td><td className={'r num ' + tone(b.change)}>{signedMoney(b.change)}</td><td className="r num">{money(b.balance)}</td><td className="r muted">{time(b.at)}</td></tr>)}
+            {balances.slice(0, 200).map((b, i) => <tr key={i}><td>{nameOf(b.sym)}{b.div ? <small>Dividend</small> : b.fee ? <small>Includes a {money(b.fee)} cost</small> : null}</td><td className={'r num ' + tone(b.change)}>{signedMoney(b.change)}</td><td className="r num">{money(b.balance)}</td><td className="r muted">{time(b.at)}</td></tr>)}
           </tbody></table></div>
         ) : <Empty text={`You started with ${money(p.start)}. It changes when you finish a trade.`} />)}
         {tab === 'log' && (p.log.length ? <ul className="plain">{p.log.map((l, i) => <li key={i}><span>{l.text}</span><small>{time(l.at)}</small></li>)}</ul>
