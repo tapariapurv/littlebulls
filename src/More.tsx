@@ -91,7 +91,7 @@ export function Analytics({ p }: { p: Portfolio }) {
       {!a.count && !a.fees && !a.dividends ? <section className="card"><Empty text="Finish a trade and Bully will start working out how you’re doing." /></section> : <>
         <section className="card">
           <h2>Wins and losses added up <b className={'num ' + tone(a.total)}>{signedMoney(a.total)}</b></h2>
-          <Suspense fallback={<div className="curve" />}><Curve points={a.curve} /></Suspense>
+          {a.curve.length > 0 && <Suspense fallback={<div className="curve" />}><Curve points={a.curve} /></Suspense>} {/* costs or dividends alone leave no line to draw */}
         </section>
         <section className="stats">{stats.map(([k, label, value, sub]) => (
           <div className="card" key={label}><Term k={k}>{label}</Term><b className="num">{value}</b><small>{sub}</small></div>
