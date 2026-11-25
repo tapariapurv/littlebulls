@@ -132,7 +132,7 @@ function Chart({ symbol, live, lines, buttons }: { symbol: string; live?: number
   )
 }
 
-function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: Portfolio; symbol: string; price?: number; open: boolean; qty: number; setQty: (n: number) => void }) {
+function Ticket({ uid, p, symbol, price, live, open, qty, setQty }: { uid: string; p: Portfolio; symbol: string; price?: number; live: Record<string, number>; open: boolean; qty: number; setQty: (n: number) => void }) {
   const toast = useToast()
   const [side, setSide] = useState<Side>('buy')
   const [chosen, setType] = useState<'market' | 'limit' | 'stop' | null>(null)
@@ -147,7 +147,7 @@ function Ticket({ uid, p, symbol, price, open, qty, setQty }: { uid: string; p: 
   const [all, setAll] = useState(false) // "everything I own" stays exact, with no rounding dust left behind
 
   const frac = fractional(symbol)
-  const prices = price ? { [symbol]: price } : {}
+  const prices = price ? { ...live, [symbol]: price } : live // every holding at today’s price, so Free matches the rest of the app
   const typedAt = type === 'market' ? price ?? 0 : Number(typed) || price || 0 // a blank box means the price shown in it
   // A limit or stop the price has already passed happens now, at today's price, which is as good or better.
   const now = open && type !== 'market' && !!price && marketable(side, type, typedAt, price)
@@ -357,7 +357,7 @@ export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: s
           </div>
           {isIndex(symbol) && <p className="note holding">In real life you can’t buy an index itself; people buy a fund that copies it. Here you practise on the score, and 1 point costs 1 {exchange(p.exchange).currency}.</p>}
           {pos && <p className="note holding">You {pos.qty > 0 ? 'own' : 'sold first'} {amount(symbol, Math.abs(pos.qty))} at {money(pos.avg)}. <b className={tone((( quote?.price ?? pos.avg) - pos.avg) * pos.qty)}>{signedMoney(((quote?.price ?? pos.avg) - pos.avg) * pos.qty)}</b> so far.</p>}
-          {fits ? <Ticket uid={uid} p={p} symbol={symbol} price={quote?.price} open={open} qty={qty} setQty={setQty} />
+          {fits ? <Ticket uid={uid} p={p} symbol={symbol} price={quote?.price} live={prices} open={open} qty={qty} setQty={setQty} />
             : <p className="note">This portfolio trades on {exchange(p.exchange).name} in {exchange(p.exchange).currency}, and this one isn’t there. Make another portfolio to trade it.</p>}
         </section>
         <section className="card">

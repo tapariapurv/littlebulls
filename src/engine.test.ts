@@ -10,6 +10,7 @@ assert.equal(p.positions.A.avg, 110)
 let s = summary(p, { A: 130 })
 assert.equal(s.unrealized, 400); assert.equal(s.equity, 1400); assert.equal(s.margin, 1300); assert.equal(s.available, 100)
 assert.equal(extra(p, 'A', 'sell', 20), 0, 'selling what you hold needs no deposit'); assert.equal(extra(p, 'A', 'sell', 45), 5, 'only a short bigger than the trade you had does')
+{ const q = { ...p, fee: 1 }; assert(summary(q, { A: 70 }).available < 0); assert(canAfford(q, { A: 70 }, 'A', 'sell', 10, 70), 'you can always sell what you own, even with nothing free'); assert(!canAfford(q, { A: 70 }, 'A', 'buy', 1, 70)) }
 p = fill(p, 'A', 'sell', 5, 130)
 assert.equal(p.realized, 100); assert.equal(p.balance, 1100); assert.equal(p.positions.A.qty, 15)
 p = fill(p, 'A', 'sell', 20, 100) // flips short: closes 15 at -10, opens 5 short at 100

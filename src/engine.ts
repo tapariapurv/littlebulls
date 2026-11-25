@@ -64,8 +64,12 @@ export function summary(p: Portfolio, prices: Prices) {
 
 export const costOf = (p: Portfolio, qty: number, price: number) => qty * price * p.fee / 100
 
-export const canAfford = (p: Portfolio, prices: Prices, sym: string, side: Side, qty: number, price: number) =>
-  Number.isFinite(qty) && qty > 0 && extra(p, sym, side, qty) * price * MARGIN + costOf(p, qty, price) <= summary(p, prices).available
+/** Shrinking a trade is always allowed: it frees deposit, so even with nothing free you can get out. */
+export const canAfford = (p: Portfolio, prices: Prices, sym: string, side: Side, qty: number, price: number) => {
+  if (!Number.isFinite(qty) || qty <= 0) return false
+  const add = extra(p, sym, side, qty)
+  return add === 0 || add * price * MARGIN + costOf(p, qty, price) <= summary(p, prices).available
+}
 
 export function fill(p: Portfolio, sym: string, side: Side, qty: number, price: number, at = Date.now(), forced = false): Portfolio {
   const pos = p.positions[sym] ?? { qty: 0, avg: 0 }
