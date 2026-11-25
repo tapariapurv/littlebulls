@@ -82,7 +82,64 @@ export type Quote = { symbol: string; name: string; price: number; prev: number;
 type Quotes = { bySym: Record<string, Quote>; failed: boolean }
 
 let lastQuotes: Quotes = { bySym: {}, failed: false } // shown instantly when moving between pages
-const POLL = 15000, CLOSED_POLL = 60000
+const POLL = 15000, CLOSED_POLL = 60000, STREAMED_POLL = 60000
+const quoteListeners = new Set<() => void>()
+
+/** Yahoo's live price stream: ticks arrive within a second, so polling only has to fill in names, open/closed and yesterday's close. */
+const watched = new Map<string, number>() // symbol -> how many screens want it
+let sock: WebSocket | null = null, retry = 2000, flush = 0
+const heard: Record<string, number> = {} // symbol -> time of its last streamed tick
+const send = (k: 'subscribe' | 'unsubscribe', syms: string[]) => { if (syms.length && sock?.readyState === 1) sock.send(JSON.stringify({ [k]: syms })) }
+function connect() {
+  if (sock || !watched.size || typeof WebSocket === 'undefined') return
+  const ws = sock = new WebSocket('wss://streamer.finance.yahoo.com/?version=2')
+  ws.onopen = () => send('subscribe', [...watched.keys()])
+  ws.onmessage = e => {
+    retry = 2000
+    try { tick(decode(JSON.parse(e.data).message)) } catch { /* a message we don't understand */ }
+  }
+  ws.onclose = () => {
+    if (sock !== ws) return // closed on purpose
+    sock = null
+    if (watched.size) setTimeout(connect, retry)
+    retry = Math.min(retry * 2, 60000)
+  }
+}
+const SUBUNIT: Record<string, number> = { GBp: 100, GBX: 100, ZAc: 100, ZAC: 100, ILA: 100 } // same as the API
+function tick(m: Record<number, string | number>) {
+  const sym = m[1], old = typeof sym === 'string' && lastQuotes.bySym[sym]
+  let price = m[2] as number
+  if (!old || !old.open || !(price > 0)) return // closed markets stream pre/after-hours prices; the app shows the regular session
+  price = +(price / (SUBUNIT[m[4] as string] ?? 1)).toPrecision(price >= 1e5 ? 8 : 7) // sent as a 32-bit float
+  if (Math.abs(price / old.price - 1) > 0.5) return // not the same units as the API gave; trust the API
+  heard[sym] = Date.now()
+  lastQuotes = { ...lastQuotes, bySym: { ...lastQuotes.bySym, [sym]: { ...old, price } } }
+  flush ||= window.setTimeout(() => { flush = 0; quoteListeners.forEach(f => f()) }, 1000) // at most one redraw a second
+}
+/** Just enough protobuf for Yahoo's PricingData: 1 id, 2 price (float), 4 currency. */
+function decode(b64: string) {
+  const b = Uint8Array.from(atob(b64), c => c.charCodeAt(0)), v = new DataView(b.buffer), o: Record<number, string | number> = {}
+  let i = 0
+  const n = () => { let x = 0, k = 1, c; do { c = b[i++]; x += (c & 127) * k; k *= 128 } while (c & 128 && i < b.length); return x }
+  while (i < b.length) {
+    const t = n(), f = Math.floor(t / 8), w = t % 8
+    if (w === 0) o[f] = n()
+    else if (w === 5) { o[f] = v.getFloat32(i, true); i += 4 }
+    else if (w === 1) i += 8
+    else if (w === 2) { const len = n(); o[f] = new TextDecoder().decode(b.subarray(i, i + len)); i += len }
+    else break
+  }
+  return o
+}
+function watch(syms: string[], on: boolean) {
+  const added: string[] = [], gone: string[] = []
+  for (const s of syms) {
+    const c = (watched.get(s) ?? 0) + (on ? 1 : -1)
+    if (c > 0) { if (!watched.has(s)) added.push(s); watched.set(s, c) } else { watched.delete(s); gone.push(s) }
+  }
+  send('subscribe', added); send('unsubscribe', gone)
+  if (on) connect(); else if (!watched.size) { sock?.close(); sock = null }
+}
 
 /** Live prices. Nobody is asked for prices in a hidden tab, and a closed market is asked less often. */
 export function useQuotes(symbols: string[]): Quotes & { open: boolean } {
@@ -92,23 +149,29 @@ export function useQuotes(symbols: string[]): Quotes & { open: boolean } {
     if (!key) return
     let live = true, wait = 0, at = 0
     const load = () => {
-      at = Date.now()
+      const sent = at = Date.now()
       const all = key.split(','), parts = Array.from({ length: Math.ceil(all.length / 40) }, (_, i) => all.slice(i * 40, i * 40 + 40)) // the API takes 40 at a time
       Promise.all(parts.map(part => api<{ quotes: Quote[] }>('quote?symbols=' + encodeURIComponent(part.join(',')))))
         .then(rs => {
           const found = rs.flatMap(r => r.quotes)
           found.forEach(x => remember(x.symbol, x.name))
-          wait = found.some(x => x.open) ? POLL : CLOSED_POLL
-          lastQuotes = { failed: false, bySym: { ...lastQuotes.bySym, ...Object.fromEntries(found.map(x => [x.symbol, x])) } }
+          const now = Date.now(), streamed = (x: Quote) => now - (heard[x.symbol] ?? 0) < 30000
+          wait = !found.some(x => x.open) ? CLOSED_POLL : found.every(x => !x.open || streamed(x)) ? STREAMED_POLL : POLL
+          // A tick newer than this request beats the API's cached price.
+          const keep = (x: Quote) => (heard[x.symbol] ?? 0) > sent && lastQuotes.bySym[x.symbol] ? { ...x, price: lastQuotes.bySym[x.symbol].price } : x
+          lastQuotes = { failed: false, bySym: { ...lastQuotes.bySym, ...Object.fromEntries(found.map(x => [x.symbol, keep(x)])) } }
           if (live) setQ(lastQuotes)
         })
         .catch(() => { wait = POLL; if (live) setQ(old => ({ ...old, failed: true })) })
     }
     const check = () => { if (!document.hidden && Date.now() - at >= wait - 1000) load() }
+    const fresh = () => { if (live) setQ(lastQuotes) }
+    const syms = key.split(',')
     load()
+    watch(syms, true); quoteListeners.add(fresh)
     const t = setInterval(check, POLL)
     document.addEventListener('visibilitychange', check)
-    return () => { live = false; clearInterval(t); document.removeEventListener('visibilitychange', check) }
+    return () => { live = false; clearInterval(t); document.removeEventListener('visibilitychange', check); quoteListeners.delete(fresh); watch(syms, false) }
   }, [key])
   return { ...q, open: symbols.some(s => q.bySym[s]?.open) }
 }

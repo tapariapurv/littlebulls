@@ -95,8 +95,14 @@ def shared(key: str, ttl: float, fn, stale: float = 0):
     return hit[1]
 
 
+_backoff = {"until": 0.0, "wait": 0.0}
+
+
 def yahoo(path: str, **params):
-    """Yahoo rate limits each host separately, so a refusal from one is retried on the other."""
+    """Yahoo rate limits each host separately, so a refusal from one is retried on the other.
+    When both refuse, every call stops for a while (doubling up to 5 minutes) so the cache serves what it has instead of hammering Yahoo."""
+    if time.time() < _backoff["until"]:
+        raise requests.HTTPError("cooling down after Yahoo rate limit")
     for host in ("query1", "query2"):
         try:
             r = http.get(f"https://{host}.finance.yahoo.com{path}", params=params, timeout=5)
@@ -106,6 +112,11 @@ def yahoo(path: str, **params):
             continue
         if r.status_code != 429 and r.status_code < 500:
             break
+    if r.status_code == 429:
+        _backoff["wait"] = min(max(_backoff["wait"] * 2, 15), 300)
+        _backoff["until"] = time.time() + _backoff["wait"]
+    elif r.ok:
+        _backoff["wait"] = 0
     r.raise_for_status()
     return r
 
@@ -199,8 +210,8 @@ def history(symbol: str, range: str, res: Response, before: int | None = None):
         return {"tz": 0, "bars": []}
     try:
         c = chart(check(symbol), interval=interval, period1=start, period2=end)
-    except requests.HTTPError:
-        if before:  # Yahoo keeps limited small-candle history; this means there is no more to scroll to
+    except requests.HTTPError as e:
+        if before and e.response is not None and e.response.status_code != 429:  # a real answer, not our rate-limit cooldown. Yahoo keeps limited small-candle history; this means there is no more to scroll to
             return {"tz": 0, "bars": []}
         raise
     q = c["indicators"]["quote"][0]
