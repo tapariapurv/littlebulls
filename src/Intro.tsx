@@ -1,7 +1,7 @@
-import { useState, type ReactNode } from 'react'
-import { AnimatePresence, motion } from 'motion/react'
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { motion } from 'motion/react'
 import { CRYPTO_CCYS, EXCHANGES } from './markets'
-import { Bully, Modal } from './ui'
+import { Bully } from './ui'
 
 const KINDS: [string, string][] = [
   ['Stocks', 'A tiny piece of one company, from Reliance to Apple.'],
@@ -140,62 +140,108 @@ const Block = ({ id, title, lead, children }: { id: string; title: string; lead?
   <section id={id} className="land-block"><h2>{title}</h2>{lead && <p className="lead">{lead}</p>}{children}</section>
 )
 
-const STEPS: { title: string; body: ReactNode }[] = [
-  { title: 'Welcome to LittleBulls', body: <><p>Here you practise trading with <b>real prices</b> and <b>pretend money</b>. Nothing you do here can lose real money.</p><p>Bully the bull will explain the tricky words. Tap any word with a dotted line.</p></> },
-  { title: 'Five kinds of things to trade', body: <ul className="tour-list">{KINDS.map(([t, d]) => <li key={t}><b>{t}</b> {d}</li>)}</ul> },
-  { title: 'Three ways to place a trade', body: <ul className="tour-list">
-    <li><b>Right now</b> buys or sells at today’s price while the market is open.</li>
-    <li><b>At my price</b> waits for the price you pick. If it’s already better, it happens straight away.</li>
-    <li><b>If it reaches</b> waits for a move, often to stop a loss.</li>
-    <li>Waiting orders keep working, even after you close the app.</li></ul> },
-  { title: 'Keeping score', body: <ul className="tour-list">
-    <li><b>Total worth</b> is everything added up right now.</li>
-    <li>You can trade up to <b>twice your money</b>. Half the trade is set aside as a deposit.</li>
-    <li>If losses eat half your deposit, Bully closes your trades so you can’t lose more than you have.</li>
-    <li>Analytics and History show what worked and what didn’t.</li></ul> },
-  { title: 'Good to know', body: <ul className="tour-list">
-    <li>Prices come from free sources, and some exchanges are 15 to 20 minutes behind.</li>
-    <li>Each portfolio trades on one exchange, in its currency. Make more portfolios to try others.</li>
-    <li>This is for learning, not advice. Past prices can’t promise future ones.</li></ul> },
+type Stop = { to: string; title: string; body: ReactNode }
+// '' is the hello in the middle of the screen; 'tour' points at the link that plays this again.
+const STOPS: Stop[] = [
+  { to: '', title: 'Hi, I’m Bully!', body: <><p>Here you practise trading with <b>real prices</b> and <b>pretend money</b>, so nothing you do can lose real money.</p><p>Let me show you around, one tab at a time.</p></> },
+  { to: 'home', title: 'My money', body: <><p>Your <b>total worth</b> lives here: your cash plus what your trades are worth right now.</p><p>You can trade up to <b>twice your money</b>. Half of each trade is set aside as a deposit, and if losses eat half of it, I close your trades so you never owe anything.</p></> },
+  { to: 'stocks', title: 'Markets', body: <><p>Find something to trade: stocks, ETFs, bond funds, indexes and crypto.</p><p>Tap one to see its chart, then buy or sell <b>right now</b>, <b>at a price you pick</b>, or <b>once a price is reached</b>.</p></> },
+  { to: 'watchlist', title: 'Watchlist', body: <p>Keep your favourites in one place, so you can see how they move without searching every time.</p> },
+  { to: 'discover', title: 'Discover', body: <p>Research lists of today’s climbers and drops, and a way to compare two stocks side by side. Nothing here buys or sells.</p> },
+  { to: 'games', title: 'Games', body: <p>Play with your class or family. Host a game, share its code, and everyone trades the same pretend money. A live leaderboard shows who’s ahead.</p> },
+  { to: 'analytics', title: 'Analytics', body: <p>Once you finish a trade, see how you’re doing: how many trades won, your average win and loss, and your toughest stretch.</p> },
+  { to: 'history', title: 'History', body: <p>Every order, trade, dividend and cost you’ve had, so you can look back at what worked and what didn’t.</p> },
+  { to: 'settings', title: 'Settings', body: <p>Change how trading works, set up alerts, and turn this portfolio’s trading costs on or off.</p> },
+  { to: 'tour', title: 'One last tip', body: <><p>Words with a <b>dotted line</b> are tricky ones. Tap one and I’ll explain it.</p><p>Want this tour again? It’s right here.</p></> },
 ]
+const target = (to: string) => !to ? null
+  : document.querySelector(to === 'tour' ? '.me a[href="#/tour"]' : `a.nav[href="#/${to === 'home' ? '' : to}"]`)
 
-const slide = {
-  in: (d: number) => ({ opacity: 0, x: d * 16 }),
-  show: { opacity: 1, x: 0, transition: { duration: 0.22, ease: [0.23, 1, 0.32, 1] } },
-  out: (d: number) => ({ opacity: 0, x: d * -16, transition: { duration: 0.12 } }),
-} as const
+type Spot = { ring: { x: number; y: number; w: number; h: number }; card: { x: number; y: number } }
+/** Rings the tab and sets the card beside it on a computer, or above or below it on a phone, kept on screen. */
+function place(el: Element | null, w: number, h: number): Spot {
+  const vw = innerWidth, vh = innerHeight, clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(v, hi))
+  if (!el) return { ring: { x: vw / 2, y: vh / 2, w: 0, h: 0 }, card: { x: (vw - w) / 2, y: (vh - h) / 2 } }
+  const r = el.getBoundingClientRect(), rx = Math.max(2, r.left - 4), ry = Math.max(2, r.top - 4) // a ring at the screen's edge stays in view
+  const ring = { x: rx, y: ry, w: Math.min(vw - 2, r.right + 4) - rx, h: Math.min(vh - 2, r.bottom + 4) - ry }
+  const x = r.right + 16 + w <= vw - 12 ? r.right + 16 : clamp(r.left + r.width / 2 - w / 2, 12, vw - w - 12)
+  const y = x === r.right + 16 ? clamp(r.top + r.height / 2 - h / 2, 12, vh - h - 12) : r.top > vh / 2 ? r.top - h - 16 : r.bottom + 16
+  return { ring, card: { x, y } }
+}
 
-/** A short walk through the app. Skippable from any step, and it can be replayed from the menu. */
-export function Tour({ first, onClose }: { first: boolean; onClose: (make: boolean) => void }) {
-  const [[i, dir], go] = useState([0, 1])
-  const last = i === STEPS.length
-  const step = (d: number) => go([i + d, d])
+/** Walks through the app one tab at a time, opening each tab behind a card that explains it.
+ * Tapping a tab jumps the walk there; arrow keys step, Escape ends it. */
+export function Tour({ route, onClose }: { route: string; onClose: () => void }) {
+  const [i, setI] = useState(0)
+  const [spot, setSpot] = useState<Spot | null>(null)
+  const card = useRef<HTMLDivElement>(null)
+  const shown = useRef(false) // the first placement jumps there; later ones glide
+  const stop = STOPS[i], last = i === STOPS.length - 1
+  useEffect(() => { // hand focus back to where it was once the tour ends
+    const before = document.activeElement as HTMLElement | null
+    return () => before?.focus?.()
+  }, [])
+  const go = (k: number) => {
+    if (k < 0 || k >= STOPS.length) return
+    const to = STOPS[k].to
+    if (to && to !== 'tour') location.hash = to === 'home' ? '#/' : '#/' + to
+    setI(k)
+  }
+  useEffect(() => { // a tab tapped mid-walk takes the walk there
+    const k = STOPS.findIndex(s => s.to === route)
+    if (k > 0 && i > 0 && !last && k !== i && location.hash !== '#/tour') setI(k)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [route])
+  useLayoutEffect(() => {
+    const measure = () => {
+      if (!card.current) return
+      const el = target(stop.to)
+      el?.scrollIntoView({ block: 'nearest' })
+      setSpot(place(el, card.current.offsetWidth, card.current.offsetHeight))
+    }
+    measure()
+    addEventListener('resize', measure)
+    return () => removeEventListener('resize', measure)
+  }, [stop.to])
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => {
+      if (e.altKey || e.ctrlKey || e.metaKey || e.shiftKey || (e.target as HTMLElement).closest?.('input, textarea, select, [contenteditable]')) return
+      if (e.key === 'Escape') onClose()
+      else if (e.key === 'ArrowRight') go(i + 1)
+      else if (e.key === 'ArrowLeft') go(i - 1)
+    }
+    addEventListener('keydown', key)
+    return () => removeEventListener('keydown', key)
+  })
+  const move = { type: 'spring', duration: 0.4, bounce: 0.15 } as const
+  const pos = shown.current ? move : { duration: 0 }
+  useEffect(() => { if (spot) shown.current = true }, [spot])
   return (
-    <Modal onClose={() => onClose(false)} label="Welcome tour">
-      <div className="tour-top">
-        <div className="dots" aria-label={`Step ${i + 1} of ${STEPS.length + 1}`}>{[...STEPS, null].map((_, k) => <i key={k} className={k === i ? 'on' : ''} />)}</div>
-        {!last && <button className="link" onClick={() => onClose(false)}>Skip</button>}
-      </div>
-      <AnimatePresence mode="wait" initial={false} custom={dir}>
-        <motion.div key={i} className="tour-step" custom={dir} variants={slide} initial="in" animate="show" exit="out">
-          {last ? <>
-            <Bully size={72} mood="wow" />
-            <h2>{first ? 'Let’s make your first portfolio' : 'Try a new idea'}</h2>
-            <p className="muted">Pick an exchange, name it, and choose how much pretend money to start with.</p>
-          </> : <>
-            {i === 0 && <Bully size={72} />}
-            <h2>{STEPS[i].title}</h2>
-            <div className="tour-body">{STEPS[i].body}</div>
-          </>}
-        </motion.div>
-      </AnimatePresence>
-      <div className="tour-nav">
-        {i > 0 && <button className="ghost tiny" onClick={() => step(-1)}>Back</button>}
-        {last
-          ? <button className="primary buy" autoFocus onClick={() => onClose(true)}>{first ? 'Create my first portfolio' : 'Make a new portfolio'}</button>
-          : <button className="primary buy small" autoFocus onClick={() => step(1)}>{i === 0 ? 'Show me around' : 'Next'}</button>}
-      </div>
-      {last && !first && <button className="link" onClick={() => onClose(false)}>Back to my money</button>}
-    </Modal>
+    <>
+      {spot && <motion.div className="tour-ring" aria-hidden="true" exit={{ opacity: 0 }} transition={move}
+        initial={{ opacity: 0, x: spot.ring.x, y: spot.ring.y, width: spot.ring.w, height: spot.ring.h }}
+        animate={{ opacity: 1, x: spot.ring.x, y: spot.ring.y, width: spot.ring.w, height: spot.ring.h }} />}
+      <motion.div ref={card} role="dialog" aria-label="Tour" className="tour-card" style={{ visibility: spot ? 'visible' : 'hidden' }}
+        initial={{ opacity: 0, scale: 0.96 }} exit={{ opacity: 0, scale: 0.97, transition: { duration: 0.15 } }}
+        animate={spot ? { opacity: 1, scale: 1, x: spot.card.x, y: spot.card.y } : {}} transition={{ ...move, x: pos, y: pos }}>
+        <div className="tour-top">
+          <span className="muted">{i + 1} of {STOPS.length}</span>
+          {!last && <button className="link" onClick={onClose}>Skip tour</button>}
+        </div>
+        <div aria-live="polite">
+          <motion.div key={i} className="tour-step" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.18 }}>
+            {(i === 0 || last) && <Bully size={56} mood={last ? 'wow' : 'happy'} />}
+            <h2>{stop.title}</h2>
+            <div className="tour-body">{stop.body}</div>
+          </motion.div>
+        </div>
+        <div className="tour-nav">
+          {i > 0 && <button className="ghost tiny" onClick={() => go(i - 1)}>Back</button>}
+          {last
+            ? <button className="primary buy small" autoFocus onClick={() => { location.hash = '#/stocks'; onClose() }}>Start trading</button>
+            : <button key={i} className="primary buy small" autoFocus onClick={() => go(i + 1)}>{i === 0 ? 'Show me around' : `Next: ${STOPS[i + 1].title}`}</button>}
+        </div>
+      </motion.div>
+    </>
   )
 }

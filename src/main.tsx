@@ -258,11 +258,13 @@ function Shell({ user }: { user: User }) {
   const pick = (id: string) => { setPid(id); setAdding(false); try { localStorage.setItem('pid', id) } catch { /* private window */ } }
   const seenKey = 'tour:' + user.uid
   const [seen, setSeen] = useState(() => { try { return !!localStorage.getItem(seenKey) } catch { return true } })
-  const tour = hash === '#/tour' || (list?.length === 0 && !seen) // first visit, or asked for again from the menu
-  const endTour = (make: boolean) => {
-    setSeen(true); try { localStorage.setItem(seenKey, '1') } catch { /* private window */ }
-    if (hash === '#/tour') location.hash = '#/'
-    if (make && list?.length) setAdding(true) // with no portfolio yet, the new-portfolio form opens by itself
+  const [again, setAgain] = useState(false)
+  useEffect(() => { if (hash === '#/tour') setAgain(true) }, [hash])
+  // Runs once the first portfolio is made, so every tab has something to show, or when asked for again from the menu.
+  const tour = !!list?.length && (again || !seen)
+  const endTour = () => {
+    setSeen(true); setAgain(false); try { localStorage.setItem(seenKey, '1') } catch { /* private window */ }
+    if (location.hash === '#/tour') location.hash = '#/'
   }
   useSettler(user.uid, p)
   // A game's leaderboard works out everyone's worth from what they hold, so holdings go to the game whenever they change.
@@ -317,7 +319,7 @@ function Shell({ user }: { user: User }) {
         )}
       </main>
       <AnimatePresence>
-        {tour && list && <Tour key="tour" first={!list.length} onClose={endTour} />}
+        {tour && <Tour key="tour" route={route} onClose={endTour} />}
         {list && !tour && (list.length === 0 || adding) && (
           <NewPortfolio uid={user.uid} first={list.length === 0} onDone={pick} onClose={list.length ? () => setAdding(false) : undefined} />
         )}
