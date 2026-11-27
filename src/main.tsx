@@ -5,9 +5,10 @@ import {
   GoogleAuthProvider, createUserWithEmailAndPassword, onAuthStateChanged, sendPasswordResetEmail,
   signInWithEmailAndPassword, signInWithPopup, updateProfile, type User,
 } from 'firebase/auth'
-import { api, auth, blip, candles, events, mutate, nameOf, notify, savePlayer, savePortfolio, useQuotes, usePortfolios, useSettings } from './data'
-import { cancelOrder, clearAlerts, corporate, ended, firedAlerts, marketOrder, newPortfolio, settle, summary, type Portfolio } from './engine'
-import { exchange, short, units } from './markets'
+import { TESTER, api, auth, blip, enterTester, isTesterEmail, useTester, candles, events, mutate, nameOf, notify, savePlayer, savePortfolio, useQuotes, usePortfolios, useSettings } from './data'
+import { cancelOrder, clearAlerts, corporate, ended, firedAlerts, marketOrder, newPortfolio, runPlans, settle, stopPlan, summary, type Portfolio } from './engine'
+import { award, facts, progress } from './badges'
+import { exchange, fractional, short, units } from './markets'
 import { Games, StartFields } from './Games'
 import { Markets } from './Browse'
 import { Landing, Tour } from './Intro'
@@ -18,6 +19,7 @@ import './styles.css'
 // The chart library is big, so it arrives after login, in the background, before a stock is opened.
 const loadStock = () => import('./Stock')
 const Stock = lazy(() => loadStock().then(m => ({ default: m.Stock })))
+const Achievements = lazy(() => import('./Achievements').then(m => ({ default: m.Achievements })))
 const Discover = lazy(() => import('./Discover').then(m => ({ default: m.Discover })))
 // A tab left open across a new release asks for files that are gone; reloading picks up the new ones.
 addEventListener('vite:preloadError', () => location.reload())
@@ -43,8 +45,13 @@ function Login({ start }: { start: 'in' | 'up' }) {
   const [msg, setMsg] = useState('')
   const fail = (e: { code?: string }) => setMsg(FRIENDLY[e.code ?? ''] ?? `Something went wrong (${e.code ?? 'unknown'}). Try again.`)
 
+  const tester = isTesterEmail(email)
+  const [asking, setAsking] = useState(false)
+  const [code, setCode] = useState('')
+
   async function submit(e: FormEvent) {
     e.preventDefault(); setMsg('')
+    if (tester) return setAsking(true)
     try {
       if (mode === 'in') await signInWithEmailAndPassword(auth, email, pass)
       else {
@@ -62,12 +69,20 @@ function Login({ start }: { start: 'in' | 'up' }) {
         <h1>LittleBulls<small>Paper trading for kids</small></h1>
         <p>Learn the stock market with real prices and pretend money. Nobody can lose real money here.</p>
       </section>
-      <section className="login-form">
+      {asking ? <section className="login-form">
+        <h2>Tester code</h2>
+        <form onSubmit={e => { e.preventDefault(); if (!enterTester(code)) setMsg('That code isn’t right.') }}>
+          <label>6-digit code<input required autoFocus inputMode="numeric" autoComplete="one-time-code" pattern="[0-9]{6}" maxLength={6} value={code} onChange={e => setCode(e.target.value.replace(/\D/g, ''))} /></label>
+          {msg && <p className="note bad" role="alert">{msg}</p>}
+          <motion.button className="primary buy" whileTap={{ scale: 0.97 }}>Open the tester portal</motion.button>
+        </form>
+        <button className="link" onClick={() => { setAsking(false); setCode(''); setMsg('') }}>← Back</button>
+      </section> : <section className="login-form">
         <h2>{mode === 'up' ? 'Make your account' : 'Welcome back'}</h2>
         <form onSubmit={submit}>
-          {mode === 'up' && <label>Nickname<input required maxLength={24} value={nick} onChange={e => setNick(e.target.value)} autoComplete="nickname" /></label>}
+          {mode === 'up' && <label>Nickname<input required={!tester} maxLength={24} value={nick} onChange={e => setNick(e.target.value)} autoComplete="nickname" /></label>}
           <label>Email<input required type="email" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" /></label>
-          <label>Password<input required type="password" minLength={6} value={pass} onChange={e => setPass(e.target.value)} autoComplete={mode === 'up' ? 'new-password' : 'current-password'} /></label>
+          <label>Password<input required={!tester} type="password" minLength={6} value={pass} onChange={e => setPass(e.target.value)} autoComplete={mode === 'up' ? 'new-password' : 'current-password'} /></label>
           {msg && <p className="note bad" role="alert">{msg}</p>}
           <motion.button className="primary buy" whileTap={{ scale: 0.97 }}>{mode === 'up' ? 'Start trading' : 'Log in'}</motion.button>
         </form>
@@ -79,7 +94,7 @@ function Login({ start }: { start: 'in' | 'up' }) {
           <button className="link" onClick={() => { setMode(mode === 'up' ? 'in' : 'up'); setMsg('') }}>{mode === 'up' ? 'I already have an account' : 'I need a new account'}</button>
           {mode === 'in' && <> · <button className="link" onClick={() => email ? sendPasswordResetEmail(auth, email).then(() => setMsg('Check your email for a reset link.')).catch(fail) : setMsg('Type your email first.')}>Forgot password</button></>}
         </p>
-      </section>
+      </section>}
     </main>
   )
 }
@@ -118,7 +133,8 @@ function Home({ uid, p }: { uid: string; p: Portfolio }) {
   const q = useQuotes(syms)
   const prices = Object.fromEntries(Object.values(q.bySym).map(x => [x.symbol, x.price]))
   const s = summary(p, prices)
-  const [tab, setTab] = useState<'own' | 'wait'>('own')
+  const [tab, setTab] = useState<'own' | 'wait' | 'plans'>('own')
+  const plans = p.plans ?? []
   const gain = s.equity - p.start
   const parts = [['free', Math.max(s.available, 0)], ['dep', s.margin], ['hold', s.ordersMargin]] as const
   const total = parts.reduce((a, [, v]) => a + v, 0) || 1
@@ -158,7 +174,7 @@ function Home({ uid, p }: { uid: string; p: Portfolio }) {
         <p className="muted small-note">You can trade up to twice your money. <Term k="marginCall">What if I lose too much?</Term></p>
       </section>
       <section className="card">
-        <Tabs id="home" value={tab} onChange={setTab} options={[['own', `What I have (${held.length})`], ['wait', `Waiting orders (${p.orders.length})`]]} />
+        <Tabs id="home" value={tab} onChange={setTab} options={[['own', `What I have (${held.length})`], ['wait', `Waiting orders (${p.orders.length})`], ['plans', `Plans (${plans.length})`]]} />
         {tab === 'own' && (held.length ? (
           <div className="scroll"><table><thead><tr><th>Holding</th><th className="r">Amount</th><th className="r">My price</th><th className="r">Now</th><th className="r"><Term k="unrealized" end>Win or loss</Term></th><th /></tr></thead><tbody>
             <AnimatePresence initial={false}>{held.map(([sym, pos]) => {
@@ -181,6 +197,15 @@ function Home({ uid, p }: { uid: string; p: Portfolio }) {
               <td className="r"><button className="ghost tiny" onClick={() => mutate(uid, p.id, c => cancelOrder(c, o.id))}>Cancel</button></td>
             </tr>)}</tbody></table></div>
         ) : <Empty text="No waiting orders. When the market is closed, you can set a price and let your order wait for it." />)}
+        {tab === 'plans' && (plans.length ? (
+          <div className="scroll"><table><thead><tr><th>Holding</th><th>Plan</th><th className="r">Amount</th><th className="r">Next</th><th /></tr></thead><tbody>
+            {plans.map(x => <tr key={x.id}>
+              <td><a href={'#/stock/' + x.sym}><b>{nameOf(x.sym)}</b></a></td>
+              <td><Term k={x.kind}>{x.kind === 'sip' ? 'Buy' : 'Sell'}</Term> every {x.every}</td>
+              <td className="r num">{money(x.amount)}</td><td className="r muted">{new Date(x.next).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })}</td>
+              <td className="r"><button className="ghost tiny" onClick={() => mutate(uid, p.id, c => stopPlan(c, x.id))}>Stop</button></td>
+            </tr>)}</tbody></table></div>
+        ) : <Empty text="No plans yet. On any stock’s page, tap Repeat to buy (SIP) or sell (SWP) the same amount every week or month." />)}
       </section>
     </div>
   )
@@ -191,16 +216,17 @@ function useSettler(uid: string, p: Portfolio | undefined) {
   const toast = useToast()
   const latest = useRef(p)
   latest.current = p
-  const key = p ? [p.id, ...p.orders.map(o => o.id), ...Object.keys(p.positions), ...p.alerts.map(a => a.id)].join() : ''
+  const key = p ? [p.id, ...p.orders.map(o => o.id), ...Object.keys(p.positions), ...p.alerts.map(a => a.id), ...(p.plans ?? []).map(x => x.id + x.next)].join() : ''
   useEffect(() => {
-    if (!p || (!p.orders.length && !p.alerts.length && !Object.keys(p.positions).length)) return
+    if (!p || (!p.orders.length && !p.alerts.length && !p.plans?.length && !Object.keys(p.positions).length)) return
     let wait = 0
     const run = async () => {
       const now = latest.current!
       // Only alerts and orders need a hidden tab to keep working. A closed market can't reach anything, so it's checked rarely.
-      if (Date.now() < wait || (document.hidden && !now.orders.length && !now.alerts.length)) return
+      const due = (now.plans ?? []).some(x => x.next <= Date.now())
+      if (Date.now() < wait || (document.hidden && !now.orders.length && !now.alerts.length && !due)) return
       const orderSyms = [...new Set(now.orders.map(o => o.sym))]
-      const syms = [...new Set([...orderSyms, ...Object.keys(now.positions), ...now.alerts.map(a => a.sym)])]
+      const syms = [...new Set([...orderSyms, ...(now.plans ?? []).map(x => x.sym), ...Object.keys(now.positions), ...now.alerts.map(a => a.sym)])]
       const oldest = (s: string) => Math.min(...now.orders.filter(o => o.sym === s).map(o => o.at))
       const [ev, hist, quotes] = await Promise.all([
         events(now).catch(() => null),
@@ -208,22 +234,25 @@ function useSettler(uid: string, p: Portfolio | undefined) {
           const recent = await candles(s, 'orders') // small candles only go back a few days, so older orders also check daily ones
           return Date.now() - oldest(s) < 4 * 86400000 ? recent : [...await candles(s, '6M'), ...recent].sort((a, b) => a.t - b.t)
         })),
-        api<{ open: boolean; quotes: { symbol: string; price: number }[] }>('quote?symbols=' + encodeURIComponent(syms.slice(0, 40).join(','))),
+        api<{ open: boolean; quotes: { symbol: string; price: number; open: boolean }[] }>('quote?symbols=' + encodeURIComponent(syms.slice(0, 40).join(','))),
       ])
       wait = quotes.open ? 0 : Date.now() + 300000
       const byS = Object.fromEntries(orderSyms.map((s, i) => [s, hist[i]]))
       const prices = Object.fromEntries(quotes.quotes.map(x => [x.symbol, x.price]))
+      const live = Object.fromEntries(quotes.quotes.map(x => [x.symbol, x]))
       // Splits come first, so waiting orders are compared with prices in today's share sizes.
       const change = (c: Portfolio) => {
         const acted = ev ? corporate(c, ev) : null, base = acted ?? c
         const settled = settle(base, byS, prices), hits = firedAlerts(settled ?? base, prices)
-        return { next: hits.length ? clearAlerts(settled ?? base, hits) : settled ?? acted, settled, hits, base, paid: base.trades.slice(0, base.trades.length - c.trades.length).reduce((s, t) => s + (t.div ? t.pnl : 0), 0) }
+        const alerted = hits.length ? clearAlerts(settled ?? base, hits) : settled ?? acted, planned = runPlans(alerted ?? base, live, fractional)
+        return { next: planned ?? alerted, settled, hits, base, planned, paid: base.trades.slice(0, base.trades.length - c.trades.length).reduce((s, t) => s + (t.div ? t.pnl : 0), 0) }
       }
       if (!change(now).next) return // nothing happened, which is nearly always, so no database read is spent finding that out
-      let before = 0, after = 0, forced = false, fired: Portfolio['alerts'] = [], paid = 0
+      let before = 0, after = 0, forced = false, fired: Portfolio['alerts'] = [], paid = 0, ran = 0
       await mutate(uid, now.id, c => {
-        const { next, settled, hits, base, paid: got } = change(c)
+        const { next, settled, hits, base, paid: got, planned } = change(c)
         before = base.trades.length; after = settled?.trades.length ?? before; forced = !!settled?.trades[0]?.forced; fired = hits; paid = got
+        ran = planned ? planned.trades.length - (settled ?? base).trades.length : 0
         return next
       }, false)
       for (const a of fired) {
@@ -237,6 +266,7 @@ function useSettler(uid: string, p: Portfolio | undefined) {
         : { title: 'You paid dividends', body: `You sold shares you don’t own, so you paid their owners ${money(-paid)}.`, mood: 'hmm' })
       if (after > before) notify('LittleBulls', forced ? 'Bully closed your trades to protect your money.' : 'A waiting order happened.')
       if (after > before) blip()
+      if (ran) { blip(); toast({ title: ran > 1 ? 'Your plans ran' : 'Your plan ran', body: 'Bully bought or sold the amount you planned. See History for the details.', mood: 'wow' }) }
       if (forced) toast({ title: 'Bully closed your trades', body: 'Losses ate half your deposit, so your trades were closed to protect your money.', mood: 'hmm' })
       else if (after > before) toast({ title: 'A waiting order happened', body: 'The market reached your price. Check your portfolio.', mood: 'wow' })
     }
@@ -247,7 +277,7 @@ function useSettler(uid: string, p: Portfolio | undefined) {
   }, [uid, key])
 }
 
-const NAV = [['home', 'My money'], ['stocks', 'Markets'], ['watchlist', 'Watchlist'], ['discover', 'Discover'], ['games', 'Games'], ['analytics', 'Analytics'], ['history', 'History'], ['settings', 'Settings']]
+const NAV: [string, string][] = [['home', 'My money'], ['stocks', 'Markets'], ['watchlist', 'Watchlist'], ['discover', 'Discover'], ['games', 'Games'], ['analytics', 'Analytics'], ['history', 'History'], ['badges', 'Badges'], ['settings', 'Settings']]
 
 function Shell({ user }: { user: User }) {
   const hash = useHash()
@@ -267,6 +297,24 @@ function Shell({ user }: { user: User }) {
     if (location.hash === '#/tour') location.hash = '#/'
   }
   useSettler(user.uid, p)
+  const set = useSettings(), toast = useToast()
+  const nav = set.badges ? NAV : NAV.filter(([id]) => id !== 'badges')
+  const badgeKey = 'badges:' + user.uid
+  const [earned, setEarned] = useState<Record<string, number>>(() => { try { return JSON.parse(localStorage.getItem(badgeKey) ?? '{}') } catch { return {} } })
+  const known = list ? facts(list, seen) : null
+  // ponytail: dates live on this device; another device works them out again from the portfolios, dated the day it first sees them.
+  useEffect(() => {
+    if (!known) return
+    let first = false
+    try { first = localStorage.getItem(badgeKey) == null } catch { /* private window */ }
+    const { earned: all, fresh } = award(earned, known)
+    if (!fresh.length && !first) return
+    setEarned(all); try { localStorage.setItem(badgeKey, JSON.stringify(all)) } catch { /* private window */ }
+    if (!set.badges || !fresh.length) return
+    if (first && fresh.length > 1) toast({ title: `You have ${fresh.length} badges`, body: 'See them all in the Badges tab.', mood: 'wow' })
+    else for (const x of fresh) toast({ title: `New badge: ${x.icon} ${x.name}`, body: x.how, mood: 'wow' })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(known)])
   // A game's leaderboard works out everyone's worth from what they hold, so holdings go to the game whenever they change.
   const hold = p?.game && !ended(p.game.ends) ? JSON.stringify([p.balance, p.positions]) : ''
   useEffect(() => {
@@ -276,7 +324,7 @@ function Shell({ user }: { user: User }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hold, p?.id])
   const stockSym = hash.startsWith('#/stock/') ? decodeURIComponent(hash.slice(8)) : ''
-  const route = stockSym ? 'stock' : NAV.some(([id]) => id === hash.slice(2)) ? hash.slice(2) : 'home'
+  const route = stockSym ? 'stock' : nav.some(([id]) => id === hash.slice(2)) ? hash.slice(2) : 'home'
   useEffect(() => { loadStock().catch(() => {}) }, [])
   const m = p ? exchange(p.exchange) : null
   if (m) setCurrency(m.currency, m.locale)
@@ -292,7 +340,7 @@ function Shell({ user }: { user: User }) {
           </select>
         </label>
         <LayoutGroup>
-          <div className="nav-links">{NAV.map(([id, label]) => {
+          <div className="nav-links">{nav.map(([id, label]) => {
             const on = route === id || (id === 'stocks' && route === 'stock')
             return <a key={id} href={id === 'home' ? '#/' : '#/' + id} className={'nav' + (on ? ' on' : '')} aria-current={on ? 'page' : undefined}>
               {on && <motion.i layoutId="nav" transition={spring} />}<Icon name={id} /><span>{label}</span>
@@ -312,6 +360,7 @@ function Shell({ user }: { user: User }) {
             {route === 'settings' && <SettingsPage user={user} p={p} />}
             {route === 'games' && <Games user={user} p={p} list={list} pick={pick} />}
             <Suspense fallback={<div className="boot"><Bully size={72} /></div>}>
+              {route === 'badges' && <Achievements name={user.displayName || 'A LittleBulls trader'} earned={earned} progress={progress(known!)} />}
               {route === 'discover' && <Discover key={p.exchange} ex={p.exchange} />}
               {route === 'stock' && <Stock key={stockSym + p.id} uid={user.uid} p={p} symbol={stockSym} />}
             </Suspense>
@@ -330,10 +379,12 @@ function Shell({ user }: { user: User }) {
 
 function App() {
   const [user, setUser] = useState<User | null | undefined>(undefined)
+  const tester = useTester()
   useEffect(() => onAuthStateChanged(auth, setUser), [])
   const hash = useHash()
   useEffect(() => { document.getElementById('about')!.hidden = true }, []) // index.html's text is for search engines; the landing page says it all
   if (user === undefined) return <div className="boot full"><Bully size={72} /></div>
+  if (tester) return <Shell key={TESTER} user={{ uid: TESTER, displayName: 'Tester', email: null, providerData: [] } as unknown as User} />
   if (user) return <Shell key={user.uid} user={user} />
   return hash === '#/login' || hash === '#/signin' ? <Login key={hash} start={hash === '#/login' ? 'up' : 'in'} /> : <Landing />
 }

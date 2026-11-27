@@ -9,10 +9,13 @@ export type DoneOrder = { id: string; sym: string; side: Side; qty: number; type
 export type Trade = { id: string; sym: string; side: Side; qty: number; price: number; at: number; pnl: number; forced?: boolean; fee?: number; div?: boolean }
 export type Alert = { id: string; sym: string; price: number; above: boolean; at: number }
 export type Watchlist = { id: string; name: string; syms: string[] }
+/** A repeating plan: SIP puts the same money into one holding every week or month, SWP takes the same money out. */
+export type Plan = { id: string; sym: string; kind: 'sip' | 'swp'; amount: number; every: 'week' | 'month'; next: number; at: number }
 export type Portfolio = {
   id: string; name: string; start: number; balance: number; realized: number; createdAt: number; exchange: string
   positions: Record<string, Position>; orders: Order[]; trades: Trade[]; done: DoneOrder[]
   log: { at: number; text: string }[]; alerts: Alert[]; watchlists: Watchlist[]; rev?: string
+  plans?: Plan[]
   fee: number // trading cost as a percent of each trade; 0 is off
   evAt?: number // dividends and splits are counted up to here
   game?: { code: string; ends: number; as: string } // made by joining a game; ends 0 means never, as is the name on its leaderboard
@@ -224,4 +227,38 @@ export function analytics(p: Portfolio) {
     best: Math.max(0, ...closed.map(t => t.pnl)), worst: Math.min(0, ...closed.map(t => t.pnl)),
     drawdown, runup, curve, fees, dividends, byStock: Object.entries(by).sort((a, b) => b[1] - a[1]),
   }
+}
+
+export const after = (t: number, every: Plan['every']) => {
+  if (every === 'week') return t + 7 * 86400000
+  const d = new Date(t); d.setMonth(d.getMonth() + 1) // ponytail: the 31st runs early in short months, like most real SIPs move to the 1st
+  return d.getTime()
+}
+
+export const addPlan = (p: Portfolio, plan: Omit<Plan, 'id' | 'at' | 'next'>, now = Date.now()): Portfolio =>
+  note({ ...p, plans: [...(p.plans ?? []), { ...plan, id: uid(), at: now, next: now }] },
+    `Started a plan to ${plan.kind === 'sip' ? 'put' : 'take'} ${plan.amount.toFixed(2)} ${plan.kind === 'sip' ? 'into' : 'out of'} ${short(plan.sym)} every ${plan.every}`, now)
+export const stopPlan = (p: Portfolio, id: string): Portfolio => {
+  const pl = p.plans?.find(x => x.id === id)
+  return pl ? note({ ...p, plans: p.plans!.filter(x => x.id !== id) }, `Stopped the ${pl.kind.toUpperCase()} in ${short(pl.sym)}`) : p
+}
+
+/** Runs every plan that is due while its market is open, once, then moves it to its next date; days missed while away aren't made up.
+ *  Buys or sells as many whole shares as the money covers (parts for coins and indexes). Null if nothing changed. */
+export function runPlans(p: Portfolio, quotes: Record<string, { price: number; open: boolean }>, parts: (sym: string) => boolean, now = Date.now()): Portfolio | null {
+  let next = p
+  const prices = Object.fromEntries(Object.entries(quotes).map(([k, v]) => [k, v.price]))
+  for (const pl of p.plans ?? []) {
+    const q = quotes[pl.sym]
+    if (pl.next > now || !q?.open || !(q.price > 0)) continue
+    const n = parts(pl.sym) ? round8(pl.amount / q.price) : Math.floor(pl.amount / q.price)
+    const held = Math.max(0, next.positions[pl.sym]?.qty ?? 0), qty = pl.kind === 'sip' ? n : Math.min(n, held)
+    if (pl.kind === 'sip' ? qty > 0 && canAfford(next, prices, pl.sym, 'buy', qty, q.price) : qty > 0)
+      next = marketOrder(next, pl.sym, pl.kind === 'sip' ? 'buy' : 'sell', qty, q.price)
+    else next = note(next, `${pl.kind.toUpperCase()} in ${short(pl.sym)} skipped: ${pl.kind === 'sip' ? (n ? 'not enough free money' : 'one share costs more than the plan') : 'nothing left to sell'}`, now)
+    let t = pl.next
+    while (t <= now) t = after(t, pl.every)
+    next = { ...next, plans: next.plans!.map(x => x.id === pl.id ? { ...x, next: t } : x) }
+  }
+  return next === p ? null : next
 }

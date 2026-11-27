@@ -251,3 +251,14 @@ input.code { text-transform: uppercase; font-size: 20px }
 .board .me-row td { background: var(--raised) }
 .plain li.hosted { flex-wrap: wrap } .hosted > div:first-child { flex: 1; min-width: 200px } .hosted small { display: block; color: var(--muted) } .hosted .scroll { flex-basis: 100% }
 .toggle select { flex: none; height: 36px; padding: 0 8px; background: var(--surface); border: 1px solid var(--control); border-radius: var(--r-control); font-weight: 600 }
+
+/* Badges */
+.bar { display: block; height: 10px; border-radius: 99px; background: var(--raised); overflow: hidden } .bar i { display: block; height: 100%; background: var(--accent); border-radius: inherit; transition: width 300ms var(--ease-out) }
+.bar.mini { height: 6px; width: 70%; margin-top: 4px }
+.badge-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); gap: 12px }
+.badge { display: grid; justify-items: center; gap: 6px; padding: 16px 8px; border-radius: 16px; background: var(--raised); text-align: center; font-size: 14px; transition: transform 100ms var(--ease-out) }
+.badge:active { transform: scale(.97) } .badge small { font-size: 12px }
+.medal { display: grid; place-items: center; width: 64px; height: 64px; border-radius: 50%; background: var(--surface); font-size: 34px; filter: grayscale(1); opacity: .45 }
+.got .medal, .medal.got { filter: none; opacity: 1; background: var(--accent-soft); box-shadow: inset 0 0 0 3px var(--accent) }
+.medal.big { width: 104px; height: 104px; font-size: 56px; justify-self: center }
+.share { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px } .share a.ghost { display: inline-flex; align-items: center }

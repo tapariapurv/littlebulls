@@ -1,6 +1,6 @@
 import { useEffect, useState, useSyncExternalStore } from 'react'
 import { initializeApp } from 'firebase/app'
-import { getAuth } from 'firebase/auth'
+import { getAuth, signOut } from 'firebase/auth'
 import { collection, deleteDoc, doc, getDoc, initializeFirestore, onSnapshot, query, runTransaction, setDoc, where } from 'firebase/firestore'
 import { hydrate, uid as newId, type Candle, type Events, type Portfolio, type Position } from './engine'
 import { fractional, short } from './markets'
@@ -17,6 +17,22 @@ const db = initializeFirestore(app, { ignoreUndefinedProperties: true })
 
 const ref = (uid: string, id: string) => doc(db, 'users', uid, 'portfolios', id)
 
+// Tester portal: a set email, then a 6-digit code. Both come from .env.local (gitignored); with neither set, it's off.
+// Its portfolios live in this browser only, so testing never touches real accounts. Beta-only code can check `isTester()`.
+// ponytail: the email and code ship inside the site's code, so anyone determined can find them. Fine while the portal only holds browser-local pretend data.
+export const TESTER = 'tester'
+const TEST_EMAIL = (import.meta.env.VITE_TESTER_EMAIL ?? '').trim().toLowerCase(), TEST_CODE = import.meta.env.VITE_TESTER_CODE ?? ''
+export const isTesterEmail = (email: string) => !!TEST_EMAIL && email.trim().toLowerCase() === TEST_EMAIL
+const testerListeners = new Set<() => void>()
+const flip = (on: boolean) => { if (on) localStorage.setItem(TESTER, '1'); else localStorage.removeItem(TESTER); testerListeners.forEach(l => l()) }
+export const isTester = () => localStorage.getItem(TESTER) === '1'
+export const useTester = () => useSyncExternalStore(cb => { testerListeners.add(cb); return () => testerListeners.delete(cb) }, isTester)
+export const enterTester = (code: string) => { const ok = !!TEST_CODE && code === TEST_CODE; if (ok) flip(true); return ok }
+export const logOut = () => isTester() ? flip(false) : signOut(auth)
+const local = (): Record<string, Portfolio> => JSON.parse(localStorage.getItem('tester:portfolios') || '{}')
+const keep = (all: Record<string, Portfolio>) => { localStorage.setItem('tester:portfolios', JSON.stringify(all)); redraw() }
+const localList = () => Object.values(local()).map(x => hydrate(x)).sort((a, b) => a.createdAt - b.createdAt)
+
 /** Changes still on their way to the database. They're drawn on top of the saved data so a trade shows the moment it's made. */
 type Pending = { id: string; rev: string; fn: (p: Portfolio) => Portfolio | null; saved: boolean }
 let pending: Pending[] = []
@@ -29,6 +45,11 @@ export function usePortfolios(uid: string) {
   useEffect(() => {
     const again = () => setTick(n => n + 1)
     redraws.add(again)
+    if (uid === TESTER) {
+      const load = () => setList(localList())
+      load(); redraws.add(load)
+      return () => { redraws.delete(again); redraws.delete(load) }
+    }
     const stop = onSnapshot(collection(db, 'users', uid, 'portfolios'), s => {
       const docs = s.docs.map(d => hydrate(d.data()))
       pending = pending.filter(x => !x.saved && !docs.some(d => d.rev === x.rev)) // this data already includes them
@@ -39,11 +60,19 @@ export function usePortfolios(uid: string) {
   return list && pending.length ? list.map(p => pending.reduce((c, x) => x.id === c.id ? x.fn(c) ?? c : c, p)) : list
 }
 
-export const savePortfolio = (uid: string, p: Portfolio) => setDoc(ref(uid, p.id), p)
-export const deletePortfolio = (uid: string, id: string) => deleteDoc(ref(uid, id))
+export const savePortfolio = async (uid: string, p: Portfolio) => uid === TESTER ? keep({ ...local(), [p.id]: p }) : setDoc(ref(uid, p.id), p)
+export const deletePortfolio = async (uid: string, id: string) => {
+  if (uid !== TESTER) return deleteDoc(ref(uid, id))
+  const { [id]: _, ...rest } = local(); keep(rest)
+}
 
 /** Money changes run in a transaction so two open tabs can't fill the same order twice. The promise says when it's saved. */
 export function mutate(uid: string, id: string, fn: (p: Portfolio) => Portfolio | null, instant = true) {
+  if (uid === TESTER) {
+    const all = local(), next = all[id] ? fn(hydrate(all[id])) : null
+    if (next) keep({ ...all, [id]: next })
+    return Promise.resolve()
+  }
   const entry: Pending = { id, rev: newId(), fn, saved: false }
   const drop = () => { pending = pending.filter(x => x !== entry); redraw() }
   if (instant) { pending.push(entry); redraw() }
@@ -252,7 +281,7 @@ export const screen = (list: string, ex: string, n = 8) => cached<Row[]>(`discov
 export const funds = (ex: string) => cached<{ etfs: Row[]; bonds: Row[] }>('funds?ex=' + ex, 300000)
   .then(r => { [...r.etfs, ...r.bonds].forEach(x => remember(x.symbol, x.name)); return r })
 
-const DEFAULTS = { chartButtons: true, askFirst: true, chartLines: true, sound: true, notify: false, calm: false, shares: 1, list: 'main' }
+const DEFAULTS = { chartButtons: true, askFirst: true, chartLines: true, sound: true, notify: false, calm: false, shares: 1, list: 'main', badges: true }
 export type Settings = typeof DEFAULTS
 let settings: Settings = read('settings', DEFAULTS)
 const listeners = new Set<() => void>()

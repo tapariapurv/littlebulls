@@ -44,6 +44,8 @@ export function Tick({ value, className = '' }: { value: number; className?: str
 }
 
 export const TERMS: Record<string, [string, string]> = {
+  sip: ['SIP', 'A Systematic Investment Plan puts the same money into something every week or month, whatever the price. You buy more when it’s cheap and less when it’s dear.'],
+  swp: ['SWP', 'A Systematic Withdrawal Plan sells the same money’s worth every week or month, like pocket money from your savings.'],
   worth: ['Equity', 'What everything adds up to right now: your money plus or minus the trades you still have open.'],
   balance: ['Account balance', 'Your money, counting only trades you have finished. It stays still while trades are open.'],
   realized: ['Realized P&L', 'Wins and losses from trades you finished. These are locked in and can no longer change.'],

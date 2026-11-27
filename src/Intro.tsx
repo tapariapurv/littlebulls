@@ -145,12 +145,13 @@ type Stop = { to: string; title: string; body: ReactNode }
 const STOPS: Stop[] = [
   { to: '', title: 'Hi, I’m Bully!', body: <><p>Here you practise trading with <b>real prices</b> and <b>pretend money</b>, so nothing you do can lose real money.</p><p>Let me show you around, one tab at a time.</p></> },
   { to: 'home', title: 'My money', body: <><p>Your <b>total worth</b> lives here: your cash plus what your trades are worth right now.</p><p>You can trade up to <b>twice your money</b>. Half of each trade is set aside as a deposit, and if losses eat half of it, I close your trades so you never owe anything.</p></> },
-  { to: 'stocks', title: 'Markets', body: <><p>Find something to trade: stocks, ETFs, bond funds, indexes and crypto.</p><p>Tap one to see its chart, then buy or sell <b>right now</b>, <b>at a price you pick</b>, or <b>once a price is reached</b>.</p></> },
+  { to: 'stocks', title: 'Markets', body: <><p>Find something to trade: stocks, ETFs, bond funds, indexes and crypto.</p><p>Tap one to see its chart, then buy or sell <b>right now</b>, <b>at a price you pick</b>, or <b>once a price is reached</b>. <b>Repeat</b> sets up a SIP that buys for you every week or month.</p></> },
   { to: 'watchlist', title: 'Watchlist', body: <p>Keep your favourites in one place, so you can see how they move without searching every time.</p> },
   { to: 'discover', title: 'Discover', body: <p>Research lists of today’s climbers and drops, and a way to compare two stocks side by side. Nothing here buys or sells.</p> },
   { to: 'games', title: 'Games', body: <p>Play with your class or family. Host a game, share its code, and everyone trades the same pretend money. A live leaderboard shows who’s ahead.</p> },
   { to: 'analytics', title: 'Analytics', body: <p>Once you finish a trade, see how you’re doing: how many trades won, your average win and loss, and your toughest stretch.</p> },
   { to: 'history', title: 'History', body: <p>Every order, trade, dividend and cost you’ve had, so you can look back at what worked and what didn’t.</p> },
+  { to: 'badges', title: 'Badges', body: <p>Earn badges for good habits, like spreading your money out or holding for a month. Share them, or download them all as a PDF. You can turn badges off in Settings.</p> },
   { to: 'settings', title: 'Settings', body: <p>Change how trading works, set up alerts, and turn this portfolio’s trading costs on or off.</p> },
   { to: 'tour', title: 'One last tip', body: <><p>Words with a <b>dotted line</b> are tricky ones. Tap one and I’ll explain it.</p><p>Want this tour again? It’s right here.</p></> },
 ]

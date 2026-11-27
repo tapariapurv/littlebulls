@@ -122,3 +122,37 @@ const r = resetPortfolio(z); assert.equal(r.balance, 10000); assert.equal(r.trad
   assert.equal(corporate({ ...d, evAt: undefined }, {})!.evAt! > 0, true, 'old portfolios start counting')
   console.log('costs and dividends ok')
 }
+{
+  // Plans run once when due and the market is open, then wait for their next date; misses aren't made up.
+  const { addPlan, runPlans, stopPlan, after } = await import('./engine.ts')
+  const { facts, award, BADGES, pdf } = await import('./badges.ts')
+  const now = Date.UTC(2026, 0, 31, 6), q = (price: number, open = true) => ({ A: { price, open }, 'BTC-INR': { price: 1000, open: true } })
+  const whole = (s: string) => s.includes('-')
+  let p = addPlan(newPortfolio('s', 1000, 'NSE', 0), { sym: 'A', kind: 'sip', amount: 250, every: 'month' }, now - 70 * 86400000)
+  assert.equal(runPlans(p, q(100, false), whole, now), null, 'a closed market waits')
+  p = runPlans(p, q(100), whole, now)!
+  assert.equal(p.positions.A.qty, 2, 'whole shares only'); assert(p.plans![0].next > now && p.plans![0].next < now + 32 * 86400000, 'skips ahead, no catching up')
+  assert.equal(runPlans(p, q(100), whole, now + 1000), null, 'not due again yet')
+  assert.equal(new Date(after(Date.UTC(2026, 0, 15), 'month')).getUTCMonth(), 1); assert.equal(after(0, 'week'), 7 * 86400000)
+  let w = addPlan(p, { sym: 'A', kind: 'swp', amount: 1000, every: 'week' }, now)
+  w = runPlans(w, q(110), whole, now)!
+  assert.equal(w.positions.A, undefined, 'SWP sells at most what you own'); assert.equal(w.trades[0].pnl, 20)
+  w = runPlans({ ...w, plans: w.plans!.map(x => x.kind === 'swp' ? { ...x, next: now } : x) }, q(110), whole, now)!
+  assert(w.log[0].text.includes('nothing left to sell'))
+  const c = runPlans(addPlan(newPortfolio('c', 1000, 'NSE', 0), { sym: 'BTC-INR', kind: 'sip', amount: 250, every: 'week' }, now), q(1), whole, now)!
+  assert.equal(c.positions['BTC-INR'].qty, 0.25, 'coins buy parts')
+  assert.equal(stopPlan(w, w.plans![0].id).plans!.length, 1)
+
+  const f = facts([w], false, now)
+  assert.equal(f.trades, 2); assert.equal(f.wins, 1); assert.equal(f.sip, 1); assert.equal(f.swp, 1)
+  const a = award({ piggy: 5 }, f, now)
+  assert.equal(a.earned.piggy, 5, 'keeps the first date'); assert.deepEqual(a.fresh.map(x => x.id).sort(), ['first-trade', 'sip', 'swp', 'win-1'])
+  assert.equal(new Set(BADGES.map(x => x.id)).size, BADGES.length, 'ids are unique')
+
+  // Every xref offset must point at its object, or PDF readers call the file broken.
+  const doc = new TextDecoder('latin1').decode(new Uint8Array(await pdf([{ jpg: new Uint8Array([255, 216, 1, 2, 255, 217]), w: 1, h: 1 }]).arrayBuffer()))
+  const offs = [...doc.slice(doc.lastIndexOf('xref')).matchAll(/(\d{10}) 00000 n/g)].map(m => +m[1])
+  offs.forEach((o, i) => assert(doc.startsWith(`${i + 1} 0 obj`, o), `object ${i + 1}`))
+  assert.equal(+doc.match(/startxref\n(\d+)/)![1], doc.lastIndexOf('xref\n0'))
+  console.log('plans, badges and pdf ok')
+}

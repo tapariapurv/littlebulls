@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { CandlestickSeries, LineSeries, createChart, type IChartApi, type ISeriesApi, type UTCTimestamp } from 'lightweight-charts'
 import { AnimatePresence, motion } from 'motion/react'
 import { askToNotify, blip, candles, getSettings, mutate, nameOf, older, setSetting, stockInfo, useQuotes, useSettings, zoneOf, type Info } from './data'
-import { MARGIN, addAlert, addOrder, canAfford, costOf, ended, extra, marketOrder, marketable, summary, type Candle, type Portfolio, type Side } from './engine'
+import { MARGIN, addAlert, addOrder, addPlan, stopPlan, canAfford, costOf, ended, extra, marketOrder, marketable, summary, type Candle, type Portfolio, type Side } from './engine'
 import { KIND, SPEC_WORDS, amount, coin, exchange, fractional, isIndex, kindOf, matches, short, units } from './markets'
 import { Bully, Modal, Num, Tabs, Term, Tick, decimal, money, signedMoney, spring, tone, useToast } from './ui'
 
@@ -275,11 +275,47 @@ function Alerts({ uid, p, symbol, price, onClose }: { uid: string; p: Portfolio;
   )
 }
 
+function Repeat({ uid, p, symbol, price, onClose }: { uid: string; p: Portfolio; symbol: string; price?: number; onClose: () => void }) {
+  const toast = useToast()
+  const [kind, setKind] = useState<'sip' | 'swp'>('sip')
+  const [every, setEvery] = useState<'week' | 'month'>('month')
+  const [text, setText] = useState('')
+  const mine = (p.plans ?? []).filter(x => x.sym === symbol)
+  const n = Number(text), owned = Math.max(0, p.positions[symbol]?.qty ?? 0)
+  const tooSmall = !!price && !fractional(symbol) && n > 0 && n < price
+  function add(e: React.FormEvent) {
+    e.preventDefault()
+    if (!(n > 0)) return
+    mutate(uid, p.id, c => addPlan(c, { sym: symbol, kind, amount: n, every }))
+    setText('')
+    toast({ title: kind === 'sip' ? 'SIP started' : 'SWP started', body: `Bully will ${kind === 'sip' ? 'buy' : 'sell'} ${money(n)} of ${nameOf(symbol)} every ${every}, starting the next time the market is open.` })
+  }
+  return (
+    <Modal onClose={onClose} label="Repeat">
+      <h2>Repeat for {nameOf(symbol)}</h2>
+      <Tabs id="plan" value={kind} onChange={setKind} options={[['sip', 'Buy every time'], ['swp', 'Sell every time']]} />
+      <p className="muted">{kind === 'sip'
+        ? <>A <Term k="sip">SIP</Term> buys the same money’s worth again and again, so you don’t have to pick the perfect day.</>
+        : <>An <Term k="swp">SWP</Term> sells the same money’s worth again and again{owned ? '' : '. You don’t own any yet, so it will wait until you do'}.</>}</p>
+      <form onSubmit={add}>
+        <label>How much each time<input autoFocus required inputMode="decimal" value={text} onChange={e => setText(decimal(e.target.value))} /></label>
+        <label>How often<select value={every} onChange={e => setEvery(e.target.value as 'week' | 'month')}><option value="week">Every week</option><option value="month">Every month</option></select></label>
+        {tooSmall && <p className="note bad">One share costs {money(price!)}, so this would never buy one. Try a bigger amount.</p>}
+        <button className={'primary ' + (kind === 'sip' ? 'buy' : 'sell')} disabled={tooSmall}>Start {kind.toUpperCase()}</button>
+      </form>
+      <p className="muted small-note">It runs while LittleBulls is open. If you’re away on the day, it runs once when you’re back.</p>
+      {mine.length > 0 && <ul className="plain">{mine.map(x => <li key={x.id}><span className="num">{x.kind === 'sip' ? 'Buy' : 'Sell'} {money(x.amount)} every {x.every}</span>
+        <button className="ghost tiny" onClick={() => mutate(uid, p.id, c => stopPlan(c, x.id))}>Stop</button></li>)}</ul>}
+    </Modal>
+  )
+}
+
 export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: string }) {
   const toast = useToast()
   const set = useSettings()
   const [qty, setQty] = useState(set.shares)
   const [alerts, setAlerts] = useState(false)
+  const [repeat, setRepeat] = useState(false)
   const q = useQuotes([symbol, ...Object.keys(p.positions)])
   const quote = q.bySym[symbol]
   const open = !!quote?.open
@@ -329,6 +365,7 @@ export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: s
           <div><h1>{name}</h1><p className="muted">{short(symbol)} · <Term k={KIND[kindOf(symbol, quote?.kind)]?.[1] ?? 'stock'}>{KIND[kindOf(symbol, quote?.kind)]?.[0] ?? 'Stock'}</Term> · <span className={open ? 'open' : ''}>{always ? 'Open all day, every day' : open ? 'Market open' : 'Market closed'}</span></p></div>
           <span className="title-actions">
             <button className={'ghost tiny' + (watching ? ' on' : '')} aria-pressed={watching} onClick={toggleWatch}>{watching ? '★ Watching' : '☆ Watch'}</button>
+            {fits && <button className="ghost tiny" onClick={() => setRepeat(true)}>Repeat{p.plans?.some(x => x.sym === symbol) ? ` (${p.plans.filter(x => x.sym === symbol).length})` : ''}</button>}
             <button className="ghost tiny" onClick={() => setAlerts(true)}>Alert{p.alerts.some(a => a.sym === symbol) ? ` (${p.alerts.filter(a => a.sym === symbol).length})` : ''}</button>
           </span>
         </header>
@@ -373,7 +410,10 @@ export function Stock({ uid, p, symbol }: { uid: string; p: Portfolio; symbol: s
           ))}</ul> : <p className="muted">{infoFailed || info ? 'No news for this one right now.' : 'Fetching the headlines…'}</p>}
         </section>
       </aside>
-      <AnimatePresence>{alerts && <Alerts uid={uid} p={p} symbol={symbol} price={quote?.price} onClose={() => setAlerts(false)} />}</AnimatePresence>
+      <AnimatePresence>
+        {alerts && <Alerts key="alerts" uid={uid} p={p} symbol={symbol} price={quote?.price} onClose={() => setAlerts(false)} />}
+        {repeat && <Repeat key="repeat" uid={uid} p={p} symbol={symbol} price={quote?.price} onClose={() => setRepeat(false)} />}
+      </AnimatePresence>
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { Suspense, lazy, useEffect, useState, type FormEvent } from 'react'
-import { sendPasswordResetEmail, signOut, updateProfile, type User } from 'firebase/auth'
-import { askToNotify, auth, deletePortfolio, mutate, nameOf, preload, remember, removePlayer, setSetting, useQuotes, useSearch, useSettings } from './data'
+import { sendPasswordResetEmail, updateProfile, type User } from 'firebase/auth'
+import { askToNotify, auth, deletePortfolio, logOut, mutate, nameOf, preload, remember, removePlayer, setSetting, useQuotes, useSearch, useSettings } from './data'
 import { FEE, analytics, balanceHistory, resetPortfolio, uid as newId, type Portfolio } from './engine'
 import { exchange, short, units } from './markets'
 import { Empty, Tabs, Term, Tick, money, signedMoney, tone, useToast } from './ui'
@@ -13,6 +13,7 @@ const ICONS: Record<string, string> = {
   analytics: 'M5 20v-7M12 20V5M19 20v-11',
   history: 'M4 12a8 8 0 108-8 8 8 0 00-6 2.7L4 9M4 4v5h5M12 8v4l3 2',
   settings: 'M4 7h10M18 7h2M4 17h2M10 17h10M14 4.5v5h4v-5zM6 14.5v5h4v-5z',
+  badges: 'M8 3h8l-2.5 6h-3zM12 21a6 6 0 100-12 6 6 0 000 12zM12 13l1 2 2 .3-1.5 1.4.4 2.1-1.9-1-1.9 1 .4-2.1L9 15.3l2-.3z',
   games: 'M8 4h8v5a4 4 0 01-8 0zM8 6H5a3 3 0 003 4M16 6h3a3 3 0 01-3 4M12 13v4M8 20h8M10 17h4',
 }
 export const Icon = ({ name }: { name: string }) => (
@@ -207,6 +208,7 @@ export function SettingsPage({ user, p }: { user: User; p: Portfolio }) {
       <section className="card">
         <h2>App</h2>
         <Toggle on={s.calm} set={v => setSetting({ calm: v })} label="Fewer animations" />
+        <Toggle on={s.badges} set={v => setSetting({ badges: v })} label="Badges and achievements" hint="Off hides the Badges tab and its pop-ups. Badges you earn are still kept." />
         <div className="toggle"><span>Install LittleBulls<small>On iPhone or iPad: open it in Safari, tap Share, then Add to Home Screen.</small></span>
           <button className="ghost tiny" onClick={() => {
             if (installer) installer.prompt()
@@ -220,7 +222,7 @@ export function SettingsPage({ user, p }: { user: User; p: Portfolio }) {
         </form>
         <div className="button-row">
           {user.providerData.some(x => x.providerId === 'password') && <button className="ghost tiny" onClick={() => sendPasswordResetEmail(auth, user.email!).then(() => toast({ title: 'Check your email', body: 'A link to change your password is on its way.' }))}>Change password</button>}
-          <button className="ghost tiny" onClick={() => signOut(auth)}>Log out</button>
+          <button className="ghost tiny" onClick={logOut}>Log out</button>
         </div>
       </section>
     </div>
